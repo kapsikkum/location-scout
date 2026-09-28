@@ -5,6 +5,7 @@ import { haversineKm } from '../map/geo.js';
 import { Alignment, alignments, moonPhase, nextGoodWindow, PHASE_LABEL, Phase, sunriseSunset } from '../map/sun.js';
 import { hhmm, hhmm24, ymd } from '../time.js';
 import DayStrip from '../components/DayStrip.js';
+import ViewPreview from '../components/ViewPreview.js';
 import { bestWindows, buildingShadeAt, lightTimeline, WINDOW_LABEL, type ShadeTest, type Step, type WindowKind } from '../map/shootPlan.js';
 import { terrainShadeForPoint } from '../map/demPoint.js';
 import type { Footprint } from '../map/shadows.js';
@@ -344,6 +345,8 @@ export default function PlanShoot() {
               ))}
             </div>
             <label className="plan__field">Time <input type="time" value={hhmm24(focus)} onChange={(e) => { const [h, mi] = e.target.value.split(':').map(Number); if (!Number.isNaN(h)) pick(new Date(focus.getFullYear(), focus.getMonth(), focus.getDate(), h, mi)); }} /></label>
+            <h3>Preview</h3>
+            <ViewPreview lat={plan.lat} lng={plan.lng} facingDeg={plan.facingDeg} fovDeg={plan.fovDeg} time={focus} />
             <h3>Light</h3>
             <DayStrip lat={plan.lat} lng={plan.lng} time={focus} />
             {!shadeReady ? <p className="hint">Working out sun and shade…</p> : <LightStrip steps={daySteps} day={focusDay} />}
