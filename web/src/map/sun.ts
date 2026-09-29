@@ -378,3 +378,67 @@ export function moodAt(alt: number): { color: string; opacity: number } {
   const mix = c0.map((v, j) => v + (c1[j] - v) * f);
   return { color: `rgb(${Math.round(mix[0])},${Math.round(mix[1])},${Math.round(mix[2])})`, opacity: mix[3] };
 }
+
+// --- solar azimuth extremes over a range of days ----------------------------------
+
+export interface AzimuthExtreme {
+  minDeg: number;
+  maxDeg: number;
+  minDate: Date;
+  maxDate: Date;
+}
+
+export interface SunriseSunsetAzimuthRangeResult {
+  sunrise: AzimuthExtreme | null;
+  sunset: AzimuthExtreme | null;
+}
+
+/**
+ * Sunrise/sunset azimuth extremes over [startDate, startDate + days), as compass degrees.
+ * Covers the same golden-hour windows planSunBearing searches (not just the horizon crossing),
+ * so a bearing outside the range can never be matched. Extremes are tracked relative to the
+ * first azimuth seen, so a range that crosses north (high latitudes) doesn't wrap wrongly.
+ * Skips days with no sunrise/sunset; a phase with no events at all is null.
+ * ponytail: near the polar circles the sun can sweep most of the horizon in these windows; extremes are then
+ * only approximate (tracked as offsets within ±180° of the first azimuth). Fine at temperate latitudes.
+ */
+export function sunriseSunsetAzimuthRange(
+  lat: number,
+  lng: number,
+  startDate: Date,
+  days: number,
+  windows: { sunriseOffsetStartMin: number; sunriseOffsetEndMin: number; sunsetOffsetStartMin: number; sunsetOffsetEndMin: number } = SUN_BEARING_DEFAULT_WINDOWS,
+): SunriseSunsetAzimuthRangeResult {
+  type Acc = { ref: number; min: { d: number; date: Date }; max: { d: number; date: Date } } | null;
+  const add = (acc: Acc, az: number, date: Date): Acc => {
+    if (!acc) return { ref: az, min: { d: 0, date }, max: { d: 0, date } };
+    const d = angleDiff(az, acc.ref);
+    if (d < acc.min.d) acc.min = { d, date };
+    if (d > acc.max.d) acc.max = { d, date };
+    return acc;
+  };
+  const sample = (acc: Acc, event: Date, fromMin: number, toMin: number): Acc => {
+    // The sun's azimuth changes monotonically within an hour or so of the horizon, so both window ends plus the event bound it.
+    for (const off of [fromMin, 0, toMin]) {
+      const t = new Date(event.getTime() + off * MINUTE);
+      acc = add(acc, sunPosDeg(t, lat, lng).azimuthDeg, event);
+    }
+    return acc;
+  };
+  let rise: Acc = null;
+  let set: Acc = null;
+  for (let i = 0; i < days; i++) {
+    const day = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate() + i, 12);
+    const rs = sunriseSunset(day, lat, lng);
+    if (rs.sunrise && Number.isFinite(rs.sunrise.azimuth)) rise = sample(rise, rs.sunrise.time, windows.sunriseOffsetStartMin, windows.sunriseOffsetEndMin);
+    if (rs.sunset && Number.isFinite(rs.sunset.azimuth)) set = sample(set, rs.sunset.time, windows.sunsetOffsetStartMin, windows.sunsetOffsetEndMin);
+  }
+  const out = (acc: Acc): AzimuthExtreme | null => acc && {
+    minDeg: normDeg(acc.ref + acc.min.d),
+    maxDeg: normDeg(acc.ref + acc.max.d),
+    minDate: acc.min.date,
+    maxDate: acc.max.date,
+  };
+  return { sunrise: out(rise), sunset: out(set) };
+}
+

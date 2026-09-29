@@ -11,6 +11,7 @@ import {
   type SunBearingPlanHit,
 } from '../map/sun.js';
 import { hhmm, ymd } from '../time.js';
+import BearingMiniMap from './BearingMiniMap.js';
 
 export interface SunBearingPlannerProps {
   lat: number;
@@ -18,24 +19,37 @@ export interface SunBearingPlannerProps {
   defaultBearingDeg: number | null;
   label: string;
   onApplyTime?: (time: Date) => void;
+  showMap?: boolean;
 }
 
-const fmtDeg = (n: number) => `${n.toFixed(1)}°`;
-const dayLabel = (d: Date) => d.toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' });
+// Sun's disc is ~0.5° wide. ponytail: fixed cutoffs; make them a setting if people want tighter/looser grading.
+function matchGrade(errDeg: number): { label: string; tone: 'good' | 'ok' | 'warn' | 'bad' } {
+  if (errDeg <= 0.5) return { label: 'on the line', tone: 'good' };
+  if (errDeg <= 2) return { label: 'close', tone: 'ok' };
+  if (errDeg <= 5) return { label: 'near miss', tone: 'warn' };
+  return { label: 'sun never reaches this bearing', tone: 'bad' };
+}
+const Grade = ({ errDeg }: { errDeg: number }) => {
+  const g = matchGrade(errDeg);
+  return <strong className={`sunplan__grade sunplan__grade--${g.tone}`}> · {g.label}</strong>;
+};
+const fmtDeg =(n: number) => `${n.toFixed(1)}°`;
+const dayLabel = (d: Date) => d.toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
 
 function ResultRow({ hit, onApplyTime }: { hit: SunBearingPlanHit; onApplyTime?: (time: Date) => void }) {
   return (
     <li className="sunplan__result">
       <div>
         <strong>{dayLabel(hit.time)} {hhmm(hit.time)}</strong>
-        <span className="hint">{hit.phase} · az {fmtDeg(hit.azimuthDeg)} · alt {fmtDeg(hit.altitudeDeg)} · error {fmtDeg(hit.signedErrorDeg)}</span>
+        <span className="hint">{hit.phase} · az {fmtDeg(hit.azimuthDeg)} · alt {fmtDeg(hit.altitudeDeg)} · error {fmtDeg(hit.signedErrorDeg)}
+          <Grade errDeg={hit.absoluteErrorDeg} /></span>
       </div>
       {onApplyTime && <button type="button" onClick={() => onApplyTime(hit.time)}>Set time</button>}
     </li>
   );
 }
 
-export default function SunBearingPlanner({ lat, lng, defaultBearingDeg, label, onApplyTime }: SunBearingPlannerProps) {
+export default function SunBearingPlanner({ lat, lng, defaultBearingDeg, label, onApplyTime, showMap }: SunBearingPlannerProps) {
   const resultsId = useId();
   const [bearing, setBearing] = useState(defaultBearingDeg == null ? '' : String(Math.round(defaultBearingDeg)));
   const [bearingEdited, setBearingEdited] = useState(false);
@@ -76,6 +90,24 @@ export default function SunBearingPlanner({ lat, lng, defaultBearingDeg, label, 
   return (
     <section className="sunplan" aria-label={label}>
       <h4>{label}</h4>
+      <div className={showMap ? 'sunplan__split' : undefined}>
+      {showMap && (
+        <div>
+          <BearingMiniMap
+            lat={lat}
+            lng={lng}
+            bearingDeg={Number.isFinite(bearingNum) ? bearingNum : null}
+            bestHit={results[0] ? { time: results[0].time, azimuthDeg: results[0].azimuthDeg } : undefined}
+            onChange={(deg) => {
+              setBearingEdited(true);
+              setExpanded(false);
+              setBearing(String(deg));
+            }}
+          />
+          <p className="hint">Pink = your bearing · shaded wedges = where the sun rises/sets over the next year · dot = closest match. Drag on the map or use arrow keys.</p>
+        </div>
+      )}
+      <div>
       <div className="sunplan__grid">
         <label>Bearing
           <input type="number" inputMode="decimal" min={0} max={359.999} step={0.1} value={bearing}
@@ -92,7 +124,8 @@ export default function SunBearingPlanner({ lat, lng, defaultBearingDeg, label, 
       <p className="hint">Choose an exact compass bearing. Results search the next 365 days from today and are ordered by closest angular match.</p>
       {!Number.isFinite(bearingNum) ? <p className="hint">Enter a compass bearing.</p> : results.length === 0 ? <p className="hint">No sunrise or sunset window in the next 365 days.</p> : (
         <>
-          <p className="hint"><strong>Closest alignment:</strong> {dayLabel(results[0].time)} {hhmm(results[0].time)} · {fmtDeg(results[0].absoluteErrorDeg)} error</p>
+          <p className="hint"><strong>Closest alignment:</strong> {dayLabel(results[0].time)} {hhmm(results[0].time)} · {fmtDeg(results[0].absoluteErrorDeg)} error<Grade errDeg={results[0].absoluteErrorDeg} /></p>
+          {results[0].absoluteErrorDeg > 5 && <p className="hint">The sun never rises or sets within 5° of this bearing in the next year; these are just the nearest it gets.</p>}
           <ol id={resultsId} className="plainlist sunplan__results">
           {visibleResults.map((hit) => <ResultRow key={`${hit.phase}-${hit.time.getTime()}`} hit={hit} onApplyTime={onApplyTime} />)}
           </ol>
@@ -109,6 +142,8 @@ export default function SunBearingPlanner({ lat, lng, defaultBearingDeg, label, 
           )}
         </>
       )}
+      </div>
+      </div>
     </section>
   );
 }

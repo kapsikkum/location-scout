@@ -10,6 +10,7 @@ import {
   planSunBearing,
   sunBearingSearchStart,
   SUN_BEARING_SEARCH_DAYS,
+  sunriseSunsetAzimuthRange,
   SpotLike,
   trueAltitude,
 } from '../src/map/sun.js';
@@ -189,3 +190,36 @@ test('displayedSunBearingHits: initially limits results to the two closest hits'
   assert.deepEqual(displayedSunBearingHits(hits, true), hits);
   assert.deepEqual(displayedSunBearingHits(['only'], false), ['only']);
 });
+
+test('sunriseSunsetAzimuthRange: mid-latitude over 365 days spans roughly east and west', () => {
+  const range = sunriseSunsetAzimuthRange(BATHURST.lat, BATHURST.lng, new Date('2026-01-01T00:00:00'), 365, HORIZON_ONLY);
+  assert.ok(range.sunrise, 'expected sunrise range');
+  assert.ok(range.sunset, 'expected sunset range');
+
+  // Sunrise at Bathurst spans roughly 60° - 120° (due east is 90° ± ~30°)
+  assert.ok(range.sunrise.minDeg < range.sunrise.maxDeg);
+  assert.ok(range.sunrise.minDeg >= 55 && range.sunrise.minDeg <= 75, `expected sunrise minDeg near ~60-70, got ${range.sunrise.minDeg}`);
+  assert.ok(range.sunrise.maxDeg >= 110 && range.sunrise.maxDeg <= 130, `expected sunrise maxDeg near ~115-125, got ${range.sunrise.maxDeg}`);
+  assert.ok(range.sunrise.minDate instanceof Date);
+  assert.ok(range.sunrise.maxDate instanceof Date);
+
+  // Sunset at Bathurst spans roughly 240° - 300° (due west is 270° ± ~30°)
+  assert.ok(range.sunset.minDeg < range.sunset.maxDeg);
+  assert.ok(range.sunset.minDeg >= 230 && range.sunset.minDeg <= 250, `expected sunset minDeg near ~235-245, got ${range.sunset.minDeg}`);
+  assert.ok(range.sunset.maxDeg >= 285 && range.sunset.maxDeg <= 305, `expected sunset maxDeg near ~290-300, got ${range.sunset.maxDeg}`);
+  assert.ok(range.sunset.minDate instanceof Date);
+  assert.ok(range.sunset.maxDate instanceof Date);
+});
+
+
+const HORIZON_ONLY = { sunriseOffsetStartMin: 0, sunriseOffsetEndMin: 0, sunsetOffsetStartMin: 0, sunsetOffsetEndMin: 0 };
+const sweep = (r: { minDeg: number; maxDeg: number }) => ((r.maxDeg - r.minDeg) % 360 + 360) % 360;
+
+test('sunriseSunsetAzimuthRange: golden-hour windows widen the range the planner can match', () => {
+  const start = new Date('2026-01-01T00:00:00');
+  const horizon = sunriseSunsetAzimuthRange(BATHURST.lat, BATHURST.lng, start, 365, HORIZON_ONLY);
+  const windowed = sunriseSunsetAzimuthRange(BATHURST.lat, BATHURST.lng, start, 365);
+  assert.ok(sweep(windowed.sunrise!) > sweep(horizon.sunrise!));
+  assert.ok(sweep(windowed.sunset!) > sweep(horizon.sunset!));
+});
+

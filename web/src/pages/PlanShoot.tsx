@@ -431,6 +431,7 @@ export default function PlanShoot() {
                 defaultBearingDeg={plan.facingDeg}
                 label="Exact bearing planner"
                 onApplyTime={pick}
+                showMap
               />
             </details>
           </section>
