@@ -28,7 +28,7 @@ import {
 } from './feeds/trains.js';
 import { nearbyFor } from './feeds/eventScout.js';
 import { getCachedRail, requestTilesForUnsnapped, trackGraphFor } from './sources/rail.js';
-import { commonsNearbyCached } from './sources/commons.js';
+import { commonsNearbyCached, lensStats } from './sources/commons.js';
 import { coverFields, deleteImages, detectImageType, MAX_PHOTO_BYTES, parseMultipart, saveImage, SPOT_COVER_COLS } from './photos.js';
 import { buildGpx } from './gpx.js';
 import { buildFeatureCollection, importFeatureCollection, ShareBundle, syncRemote } from './share.js';
@@ -445,11 +445,14 @@ app.delete('/api/spots/:id', (req, res) => {
 interface PhotoRow {
   id: string; spot_id: string; owner_id: string; kind: string; file: string; thumb: string;
   w: number; h: number; taken_at: string | null; caption: string; created_at: string;
+  focal_length?: number | null; date_time_original?: string | null;
 }
 function photoJson(r: PhotoRow) {
   return {
     id: r.id, spotId: r.spot_id, kind: r.kind, url: `/api/photos/${r.id}/file`, thumbUrl: `/api/photos/${r.id}/thumb`,
     w: r.w, h: r.h, takenAt: r.taken_at, caption: r.caption, createdAt: r.created_at,
+    focalLength: r.focal_length ?? null,
+    dateTimeOriginal: r.date_time_original ?? r.taken_at ?? null,
   };
 }
 
@@ -463,15 +466,20 @@ app.post('/api/spots/:id/photos', async (req, res, next) => {
     if (!files.photo || !detectImageType(files.photo)) return res.status(400).json({ error: 'photo must be a JPEG, PNG or WebP file' });
     const thumbBuf = files.thumb && detectImageType(files.thumb) ? files.thumb : files.photo;
 
+    const parsedFocal = fields.focalLength ? Number(fields.focalLength) : null;
+    const focalLength = parsedFocal !== null && Number.isFinite(parsedFocal) && parsedFocal > 0 ? parsedFocal : null;
+    const takenAt = fields.takenAt || null;
+    const dateTimeOriginal = takenAt;
+
     const file = saveImage(files.photo);
     const thumb = saveImage(thumbBuf);
     const id = crypto.randomUUID();
     const now = new Date().toISOString();
     const kind = fields.kind === 'of_location' ? 'of_location' : 'taken_here';
     db.handle
-      .prepare('INSERT INTO photos (id, spot_id, owner_id, kind, file, thumb, w, h, taken_at, caption, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .prepare('INSERT INTO photos (id, spot_id, owner_id, kind, file, thumb, w, h, taken_at, caption, created_at, focal_length, date_time_original) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
       .run(id, spot.id, req.user!.id, kind, file, thumb, Number(fields.w ?? 0) || 0, Number(fields.h ?? 0) || 0,
-        fields.takenAt || null, fields.caption ?? '', now);
+        takenAt, fields.caption ?? '', now, focalLength, dateTimeOriginal);
     res.status(201).json(photoJson(db.handle.prepare('SELECT * FROM photos WHERE id = ?').get(id) as unknown as PhotoRow));
   } catch (err) { next(err); }
 });
@@ -855,7 +863,21 @@ app.get('/api/spots/:id/commons', async (req, res, next) => {
   try {
     const spot = db.handle.prepare('SELECT * FROM spots WHERE id = ?').get(req.params.id) as unknown as SpotRow | undefined;
     if (!spot || !canRead(spot.visibility, spot.owner_id, req.user)) return res.status(404).json({ error: 'Not found' });
-    res.json(await commonsNearbyCached(db, spot.lat, spot.lng));
+    const images = await commonsNearbyCached(db, spot.lat, spot.lng);
+    const ownRows = db.handle
+      .prepare('SELECT focal_length, taken_at, date_time_original FROM photos WHERE spot_id = ?')
+      .all(spot.id) as { focal_length: number | null; taken_at: string | null; date_time_original: string | null }[];
+    const allPhotos = [
+      // Commons clocks are often left on the uploader's home zone, so only own photos inform the time of day.
+      ...images.map((c) => ({ focal35: c.focal35, focalRaw: c.focalRaw, takenAt: null })),
+      ...ownRows.map((p) => ({
+        focal35: null,
+        focalRaw: p.focal_length,
+        takenAt: p.date_time_original ?? p.taken_at,
+      })),
+    ];
+    const stats = lensStats(allPhotos);
+    res.json({ images, stats });
   } catch (err) { next(err); }
 });
 

@@ -1,18 +1,18 @@
 import { useEffect, useState } from 'react';
-import { api, CommonsImage, NearbyResult, Spot, TrainPass } from '../api.js';
+import { api, CommonsResponse, NearbyResult, Spot, TrainPass } from '../api.js';
 import { hhmm } from '../time.js';
 
 /** Phase 3 "Nearby": Event Scout events and crowd, next trains passing, and Commons inspiration. */
 export default function Nearby({ spot }: { spot: Spot }) {
   const [nearby, setNearby] = useState<NearbyResult | null>(null);
   const [trains, setTrains] = useState<{ configured: boolean; passes: TrainPass[] } | null>(null);
-  const [commons, setCommons] = useState<CommonsImage[] | null>(null);
+  const [commons, setCommons] = useState<CommonsResponse | null>(null);
 
   useEffect(() => {
     setNearby(null); setTrains(null); setCommons(null);
     api.spotNearby(spot.id).then(setNearby).catch(() => setNearby({ events: [], crowd: null, status: 'not_configured' }));
     api.spotTrains(spot.id).then(setTrains).catch(() => setTrains({ configured: false, passes: [] }));
-    api.spotCommons(spot.id).then(setCommons).catch(() => setCommons([]));
+    api.spotCommons(spot.id).then(setCommons).catch(() => setCommons({ images: [], stats: null }));
   }, [spot.id]);
 
   return (
@@ -48,16 +48,19 @@ export default function Nearby({ spot }: { spot: Spot }) {
         <ul className="plainlist">{trains.passes.slice(0, 5).map((p) => <li key={p.tripId + p.at}>{p.route || p.headsign || 'Train'} · {hhmm(new Date(p.at))}</li>)}</ul>
       )}
 
-      {commons && commons.length > 0 && (
+      {commons && (commons.images.length > 0 || commons.stats) && (
         <>
           <h4>Inspiration from Commons</h4>
-          <div className="photos__grid">
-            {commons.map((c) => (
-              <a key={c.pageUrl} href={c.pageUrl} target="_blank" rel="noreferrer" title={c.title}>
-                {c.thumbUrl && <img src={c.thumbUrl} alt={c.title} />}
-              </a>
-            ))}
-          </div>
+          {commons.stats?.summary && <p className="hint">{commons.stats.summary}</p>}
+          {commons.images.length > 0 && (
+            <div className="photos__grid">
+              {commons.images.map((c) => (
+                <a key={c.pageUrl} href={c.pageUrl} target="_blank" rel="noreferrer" title={c.title}>
+                  {c.thumbUrl && <img src={c.thumbUrl} alt={c.title} />}
+                </a>
+              ))}
+            </div>
+          )}
         </>
       )}
     </>

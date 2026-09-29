@@ -80,6 +80,8 @@ export interface Photo {
   takenAt: string | null;
   caption: string;
   createdAt: string;
+  focalLength?: number | null;
+  dateTimeOriginal?: string | null;
 }
 
 export interface Settings {
@@ -191,7 +193,38 @@ export interface NearbyResult {
 }
 
 export interface Candidate { id: string; source: string; ref: string; name: string; lat: number; lng: number; tags: Record<string, string>; fetchedAt: string }
-export interface CommonsImage { title: string; pageUrl: string; thumbUrl: string | null; lat: number; lng: number }
+export interface CommonsImage {
+  title: string;
+  pageUrl: string;
+  thumbUrl: string | null;
+  lat: number;
+  lng: number;
+  focal35?: number | null;
+  focalRaw?: number | null;
+  takenAt?: string | null;
+  model?: string | null;
+}
+
+export interface LensBucket {
+  key: string;
+  label: string;
+  count: number;
+  pct: number;
+}
+
+export interface LensStats {
+  total: number;
+  buckets: LensBucket[];
+  hours: number[];
+  peakWindow: string | null;
+  summary: string;
+}
+
+export interface CommonsResponse {
+  images: CommonsImage[];
+  stats: LensStats | null;
+  lenses?: LensStats | null;
+}
 
 export interface TaskStatus {
   name: string; label: string; description: string; enabled: boolean; canDisable: boolean; manualOnly: boolean;
@@ -303,11 +336,11 @@ export const api = {
   spotPhotos: (spotId: string) => fetch(`/api/spots/${spotId}/photos`).then((r) => json<Photo[]>(r)),
   updatePhoto: (id: string, patch: { caption?: string; kind?: Photo['kind'] }) =>
     fetch(`/api/photos/${id}`, { method: 'PATCH', headers: jsonHeaders, body: JSON.stringify(patch) }).then((r) => json<Photo>(r)),
-  uploadPhoto: (spotId: string, photo: Blob, thumb: Blob, meta: { kind?: string; caption?: string; takenAt?: string; w?: number; h?: number } = {}) => {
+  uploadPhoto: (spotId: string, photo: Blob, thumb: Blob, meta: { kind?: string; caption?: string; takenAt?: string; focalLength?: number | null; w?: number; h?: number } = {}) => {
     const form = new FormData();
     form.append('photo', photo);
     form.append('thumb', thumb);
-    for (const [k, v] of Object.entries(meta)) if (v !== undefined) form.append(k, String(v));
+    for (const [k, v] of Object.entries(meta)) if (v !== undefined && v !== null) form.append(k, String(v));
     return fetch(`/api/spots/${spotId}/photos`, { method: 'POST', body: form }).then((r) => json<Photo>(r));
   },
   deletePhoto: (id: string) => fetch(`/api/photos/${id}`, { method: 'DELETE' }).then((r) => json<{ ok: boolean }>(r)),
@@ -365,7 +398,13 @@ export const api = {
   // --- candidates + Commons ---
   candidates: (bbox?: string) => fetch(`/api/candidates${bbox ? `?bbox=${bbox}` : ''}`).then((r) => json<Candidate[]>(r)),
   promoteCandidate: (id: string) => fetch(`/api/candidates/${id}/promote`, { method: 'POST' }).then((r) => json<Spot>(r)),
-  spotCommons: (spotId: string) => fetch(`/api/spots/${spotId}/commons`).then((r) => json<CommonsImage[]>(r)),
+  spotCommons: (spotId: string) =>
+    fetch(`/api/spots/${spotId}/commons`)
+      .then((r) => json<CommonsResponse | CommonsImage[]>(r))
+      .then((res) => {
+        if (Array.isArray(res)) return { images: res, stats: null, lenses: null };
+        return res;
+      }),
 
   // --- background tasks ---
   tasks: () => fetch('/api/tasks').then((r) => json<{ tasks: TaskStatus[] }>(r)),

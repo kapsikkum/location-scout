@@ -19,7 +19,7 @@ Everything follows `INSTANCE_MODE` (see the README), apart from first-run setup 
 | GET/PATCH/DELETE | `/api/places/:id` | |
 | GET/POST | `/api/spots` | `?bbox=s,w,n,e`, `?near=lat,lng&radiusKm=`, `?placeId=`. |
 | GET/PATCH/DELETE | `/api/spots/:id` | `goodTimes` is validated: phases, months, days, conditions, event keywords, avoid, notes. |
-| POST | `/api/spots/:id/photos` | Multipart `photo` + `thumb` (already resized in the browser); checked by magic bytes, capped at 15MB. |
+| POST | `/api/spots/:id/photos` | Multipart `photo` + `thumb` (already resized in the browser); checked by magic bytes, capped at 15MB. EXIF focal length and timestamp preserved in photo row. |
 | GET | `/api/photos/:id/file`, `/api/photos/:id/thumb` | Auth-checked against the parent spot's visibility. |
 | GET | `/api/spots/:id/photos` | The spot's photos. |
 | PATCH/DELETE | `/api/photos/:id` | PATCH takes `caption` and `kind`. |
@@ -55,7 +55,7 @@ Same auth rules as above.
 | GET | `/api/eventscout/test?url=` | Admin: try reaching an Event Scout URL. |
 | GET | `/api/candidates?bbox=` | OSM candidate points of interest. |
 | POST | `/api/candidates/:id/promote` | Turn a candidate into a spot. |
-| GET | `/api/spots/:id/commons` | Wikimedia Commons photos near the spot, cached 1 day. |
+| GET | `/api/spots/:id/commons` | Wikimedia Commons photos near the spot (cached 1 day) and lens advisor stats (`{ images, stats }`). |
 | GET | `/api/fires` | NSW RFS major incidents (fires), cached 5 min. |
 | GET | `/api/aurora` | NOAA planetary K-index (now + next 24h max), cached 30 min. |
 | GET | `/api/marine?lat=&lng=` | Open-Meteo marine tides and swell for coastal spots, cached per 0.05° cell for 1 h. |
