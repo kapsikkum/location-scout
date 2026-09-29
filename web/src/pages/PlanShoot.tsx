@@ -12,6 +12,7 @@ import type { Footprint } from '../map/shadows.js';
 import { CRITERIA, DEFAULT_CRITERIA, parseCriteria, railDistanceKm, recommend, weatherAt, type Criterion, type Recommendation, type WeatherHour, type WeatherResponse } from '../map/recommend.js';
 import { fetchWeather, fetchMarine, formatMarineDay, type PlanWeatherResponse } from './planWeather.js';
 import { burnScore, hourAt } from '../map/weather.js';
+import { milkyWayWindows } from '../map/galaxy.js';
 import { MAP_CENTRE_KEY } from './MapPage.js';
 import SunBearingPlanner from '../components/SunBearingPlanner.js';
 
@@ -271,10 +272,15 @@ export default function PlanShoot() {
   const hourly = weather && weather !== 'loading' ? weather.hourly : null;
   const planeCount = Array.isArray(planes) ? planes.length : null;
 
+  const mwWindows = useMemo(() => {
+    if (!plan) return [];
+    return Array.from({ length: days }, (_, i) => milkyWayWindows(addDays(fromDay, i), plan.lat, plan.lng)).flat();
+  }, [plan?.id, plan?.lat, plan?.lng, fromDay.getTime(), days]);
+
   const effective = criteria.filter((c) => (c !== 'train' || trainAvailable) && (c !== 'align' || plan?.facingDeg != null));
   const recs: Recommendation[] = useMemo(() => shadeReady && steps.length
-    ? recommend({ slots: steps, criteria: effective, weather: hourly, passes: trainPasses, alignments: aligns, livePlanes: planeCount, trainWindowMin: TRAIN_WINDOW_MIN, fmt: hhmm, n: 5 })
-    : [], [steps, effective.join(), hourly, trainPasses, aligns, planeCount]);
+    ? recommend({ slots: steps, criteria: effective, weather: hourly, passes: trainPasses, alignments: aligns, milkyWay: mwWindows, livePlanes: planeCount, trainWindowMin: TRAIN_WINDOW_MIN, fmt: hhmm, n: 5 })
+    : [], [steps, effective.join(), hourly, trainPasses, aligns, mwWindows, planeCount]);
 
   const focus = selected ?? recs[0]?.t ?? new Date(Math.max(fromDay.getTime(), Date.now()));
   const focusDay = startOfDay(focus);

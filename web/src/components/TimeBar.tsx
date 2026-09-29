@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api, type AuroraData } from '../api.js';
 import { dayPhases, moonPhase, moonPos, PHASE_COLOR, PHASE_LABEL, phaseAt, sunPos } from '../map/sun.js';
+import { galacticCorePosition, milkyWayWindows } from '../map/galaxy.js';
 import { hhmm, useMapTime, ymd } from '../time.js';
 
 /** Date picker, Now button and a slider over the selected day with its sun phases drawn on the track. */
@@ -37,6 +38,10 @@ export default function TimeBar({ lat, lng }: { lat: number; lng: number }) {
   const maxKp = Math.max(aurora?.kpNow ?? 0, aurora?.kpMaxNext24h ?? 0);
   const showAurora = maxKp >= 5 && Math.abs(lat) >= 30;
 
+  const mwWindows = useMemo(() => milkyWayWindows(dayStart, rLat, rLng), [dayKey, rLat, rLng]);
+  const inMwWindow = mwWindows.some((w) => time >= w.start && time < w.end);
+  const mwCore = inMwWindow ? galacticCorePosition(time, lat, lng) : null;
+
   return (
     <div className="timebar">
       <div className="timebar__top">
@@ -54,6 +59,11 @@ export default function TimeBar({ lat, lng }: { lat: number; lng: number }) {
         {showAurora && (
           <span className="chip" title={`Current Kp: ${aurora?.kpNow?.toFixed(1) ?? '?'}, next 24h max: ${aurora?.kpMaxNext24h?.toFixed(1) ?? '?'}`}>
             Aurora possible · Kp {maxKp.toFixed(1)}
+          </span>
+        )}
+        {inMwWindow && mwCore && (
+          <span className="chip" title="Milky Way core visibility">
+            MW core {Math.round(mwCore.altitude)}° @ {Math.round(mwCore.azimuth) % 360}°
           </span>
         )}
       </div>
