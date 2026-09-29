@@ -136,6 +136,7 @@ export default function MapPage({ user }: { user: User | null }) {
   useEffect(() => {
     const m = new MlMap({ container: container.current!, style: STYLE_URL, center: [149.577, -33.419], zoom: 10, maxPitch: 75 });
     m.addControl(new NavigationControl({ visualizePitch: true }), 'top-right');
+    m.addControl(homeControl(), 'top-right');
     m.addControl(new ScaleControl({}), 'bottom-left');
     m.once('style.load', () => { initLayers(m); initFeedLayers(m); setMap(m); });
     const onMove = () => {
@@ -949,6 +950,22 @@ function showFirePopup(map: MlMap, at: [number, number], p: Record<string, any>)
     + (status ? `<span>Status: ${status}${size}</span>` : '')
     + link;
   openPopup(map, at, html);
+}
+
+/** Map control: fly back to the instance's home (Settings), read on each click so an edited home applies at once. */
+function homeControl() {
+  const el = document.createElement('div');
+  el.className = 'maplibregl-ctrl maplibregl-ctrl-group';
+  el.innerHTML = `<button type="button" title="Home" aria-label="Fly to home"><svg viewBox="0 0 24 24" width="18" height="18" style="margin:auto;display:block" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M3 11 12 4l9 7"/><path d="M5 10v10h5v-6h4v6h5V10"/></svg></button>`;
+  return {
+    onAdd(map: MlMap) {
+      el.querySelector('button')!.onclick = () => {
+        api.settings().then((s) => map.flyTo({ center: [s.home.lng, s.home.lat], zoom: 10, bearing: 0, pitch: 0 })).catch(() => {});
+      };
+      return el;
+    },
+    onRemove() { el.remove(); },
+  };
 }
 
 function showCameraPopup(map: MlMap, at: [number, number], p: Record<string, any>) {
