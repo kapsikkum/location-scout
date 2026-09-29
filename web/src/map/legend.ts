@@ -10,12 +10,14 @@ export interface LegendLayer {
   paint?: Record<string, unknown>;
 }
 
-export type SwatchKind = 'line' | 'dashed' | 'fill' | 'dot' | 'text' | 'ring';
+export type SwatchKind = 'line' | 'dashed' | 'fill' | 'dot' | 'text' | 'ring' | 'glyph' | 'camera';
 export interface Category {
   key: string;
   label: string;
   group: 'Base map' | 'Overlays';
   swatch: SwatchKind;
+  /** The character a 'glyph' swatch draws (the same one the map draws). */
+  glyph?: string;
   /** Fallback colour when the style paint isn't a plain colour. */
   color: string;
   /** Paint property to read the colour from (on the first matching layer that has a literal). */
@@ -27,45 +29,40 @@ export interface Category {
 const sl = (l: LegendLayer) => l['source-layer'];
 const f = (l: LegendLayer) => JSON.stringify(l.filter ?? null);
 const isRail = (l: LegendLayer) => /\brail\b|"transit"|_rail/.test(`${l.id} ${f(l)}`);
-const isPath = (l: LegendLayer) => /path|pedestrian|service_track|"track"/.test(`${l.id} ${f(l)}`);
 const ids = (...list: string[]) => (l: LegendLayer) => list.includes(l.id);
 
+// One row per thing that looks different on the map; things drawn together (e.g. the single shadow raster) share a row.
 export const CATEGORIES: Category[] = [
-  { key: 'roads', label: 'Roads', group: 'Base map', swatch: 'line', color: '#fc8', paintProp: 'line-color', defaultOn: true,
-    match: (l) => (sl(l) === 'transportation' && !isRail(l) && !isPath(l)) || sl(l) === 'aeroway' },
+  { key: 'roads', label: 'Roads & tracks', group: 'Base map', swatch: 'line', color: '#fc8', paintProp: 'line-color', defaultOn: true,
+    match: (l) => (sl(l) === 'transportation' && !isRail(l)) || sl(l) === 'aeroway' },
   { key: 'rail-base', label: 'Railways', group: 'Base map', swatch: 'dashed', color: '#bbb', paintProp: 'line-color', defaultOn: true,
     match: (l) => sl(l) === 'transportation' && isRail(l) },
-  { key: 'paths', label: 'Paths & tracks', group: 'Base map', swatch: 'dashed', color: '#cba', paintProp: 'line-color', defaultOn: true,
-    match: (l) => sl(l) === 'transportation' && isPath(l) && !isRail(l) },
-  { key: 'water', label: 'Water', group: 'Base map', swatch: 'fill', color: '#9ec7e8', paintProp: 'fill-color', defaultOn: true,
-    match: (l) => (sl(l) === 'water' || sl(l) === 'waterway') && l.type !== 'symbol' },
+  { key: 'water', label: 'Water, parks & land use', group: 'Base map', swatch: 'fill', color: '#9ec7e8', paintProp: 'fill-color', defaultOn: true,
+    match: (l) => ((sl(l) === 'water' || sl(l) === 'waterway') && l.type !== 'symbol') || ['park', 'landuse', 'landcover'].includes(sl(l) ?? '') },
   { key: 'buildings', label: 'Buildings', group: 'Base map', swatch: 'fill', color: '#d9d0c9', paintProp: 'fill-color', defaultOn: true,
     match: (l) => sl(l) === 'building' },
   { key: 'boundaries', label: 'Boundaries', group: 'Base map', swatch: 'dashed', color: '#a37da1', paintProp: 'line-color', defaultOn: true,
     match: (l) => sl(l) === 'boundary' },
-  { key: 'landuse', label: 'Land use & parks', group: 'Base map', swatch: 'fill', color: '#d8e8c8', paintProp: 'fill-color', defaultOn: true,
-    match: (l) => ['park', 'landuse', 'landcover'].includes(sl(l) ?? '') },
-  { key: 'labels', label: 'Place & road labels', group: 'Base map', swatch: 'text', color: '#333', paintProp: 'text-color', defaultOn: true,
-    match: (l) => l.type === 'symbol' && ['place', 'transportation_name', 'water_name', 'waterway', 'aerodrome_label', 'transportation'].includes(sl(l) ?? '') },
-  { key: 'pois', label: 'Points of interest', group: 'Base map', swatch: 'dot', color: '#666', paintProp: 'text-color', defaultOn: true,
-    match: (l) => sl(l) === 'poi' },
+  { key: 'labels', label: 'Labels & points of interest', group: 'Base map', swatch: 'text', color: '#333', paintProp: 'text-color', defaultOn: true,
+    match: (l) => sl(l) === 'poi' || (l.type === 'symbol' && ['place', 'transportation_name', 'water_name', 'waterway', 'aerodrome_label', 'transportation'].includes(sl(l) ?? '')) },
 
-  { key: 'spots', label: 'Spots & photo thumbnails', group: 'Overlays', swatch: 'dot', color: '#4cc3ff', defaultOn: true,
-    match: ids('spot-points', 'spot-label', 'spot-thumbs', 'place-spots', 'place-spots-label', 'place-spot-thumbs', 'clusters', 'cluster-count') },
-  { key: 'imagery', label: 'Satellite imagery', group: 'Overlays', swatch: 'fill', color: '#3b5a3a', defaultOn: false, match: ids('imagery') },
-  { key: 'night-lights', label: 'Night lights', group: 'Overlays', swatch: 'fill', color: '#ffd23f', defaultOn: false, match: ids('night-lights') },
-  { key: 'terrain', label: 'Terrain shading', group: 'Overlays', swatch: 'fill', color: '#5a5f6e', defaultOn: true, match: ids('hillshade', 'terrain-shadow') },
-  { key: 'shadows', label: 'Building shadows', group: 'Overlays', swatch: 'fill', color: '#0a0c1a', paintProp: 'fill-color', defaultOn: true, match: ids('shadows') },
-  { key: 'outlines', label: 'Place outlines', group: 'Overlays', swatch: 'line', color: '#f5a623', paintProp: 'line-color', defaultOn: true, match: ids('place-fill', 'place-line') },
+  { key: 'spots', label: 'Spots & places', group: 'Overlays', swatch: 'dot', color: '#4cc3ff', defaultOn: true,
+    match: ids('spot-points', 'spot-label', 'spot-thumbs', 'place-spots', 'place-spots-label', 'place-spot-thumbs', 'clusters', 'cluster-count', 'place-fill', 'place-line') },
   { key: 'sun', label: 'Sun/moon rays & light wedges', group: 'Overlays', swatch: 'line', color: '#ffd23f', defaultOn: true, match: ids('rays', 'wedges') },
-  { key: 'rail', label: 'Rail network', group: 'Overlays', swatch: 'line', color: '#4cc3ff', defaultOn: false, match: ids('rail-lines', 'rail-industrial') },
+  { key: 'terrain', label: 'Relief & shadows', group: 'Overlays', swatch: 'fill', color: '#5a5f6e', defaultOn: true, match: ids('hillshade', 'terrain-shadow', 'shadows') },
+  { key: 'imagery', label: 'Satellite', group: 'Overlays', swatch: 'fill', color: '#3b5a3a', defaultOn: false, match: ids('imagery') },
+  { key: 'night-lights', label: 'Night lights', group: 'Overlays', swatch: 'fill', color: '#ffd23f', defaultOn: false, match: ids('night-lights') },
+  { key: 'weather', label: 'Weather', group: 'Overlays', swatch: 'fill', color: '#3aa0ff', defaultOn: false, match: ids('radar') },
+  { key: 'rail', label: 'Rail', group: 'Overlays', swatch: 'line', color: '#4cc3ff', defaultOn: false, match: ids('rail-lines', 'rail-industrial') },
   { key: 'trains', label: 'Trains', group: 'Overlays', swatch: 'ring', color: '#22c55e', defaultOn: false, match: ids('trains') },
-  { key: 'planes', label: 'Planes', group: 'Overlays', swatch: 'dashed', color: '#dfe7ff', defaultOn: false, match: ids('planes', 'planes-proj', 'planes-ghost', 'planes-shadow', 'planes-label', 'planes-3d') },
-  { key: 'weather', label: 'Weather radar & readout', group: 'Overlays', swatch: 'fill', color: '#3aa0ff', defaultOn: false, match: ids('radar') },
-  { key: 'fires', label: 'Bush fire incidents', group: 'Overlays', swatch: 'dot', color: '#f97316', defaultOn: false, match: ids('fires-pts', 'fires-polys-line', 'fires-polys-fill') },
-  { key: 'cameras', label: 'Traffic cameras', group: 'Overlays', swatch: 'dot', color: '#38bdf8', defaultOn: false, match: ids('camera-cones', 'cameras') },
-  { key: 'candidates', label: 'OSM candidates', group: 'Overlays', swatch: 'dot', color: '#6b7280', defaultOn: false, match: ids('candidates') },
+  { key: 'planes', label: 'Planes', group: 'Overlays', swatch: 'glyph', glyph: '✈', color: '#dfe7ff', defaultOn: false, match: ids('planes', 'planes-proj', 'planes-ghost', 'planes-shadow', 'planes-label', 'planes-3d') },
+  { key: 'cameras', label: 'Cameras', group: 'Overlays', swatch: 'camera', color: '#38bdf8', defaultOn: false, match: ids('camera-cones', 'cameras') },
+  { key: 'fires', label: 'Fires', group: 'Overlays', swatch: 'dot', color: 'conic-gradient(#ef4444 0 33%, #f97316 0 66%, #eab308 0)', defaultOn: false, match: ids('fires-pts', 'fires-polys-line', 'fires-polys-fill') },
+  { key: 'candidates', label: 'Candidates', group: 'Overlays', swatch: 'dot', color: '#6b7280', defaultOn: false, match: ids('candidates') },
 ];
+
+/** The category drawn by a map chip, so the chip shows the same swatch and label as its legend row. */
+export const category = (key: string): Category => CATEGORIES.find((c) => c.key === key)!;
 
 export function categoryOf(layer: LegendLayer): string | null {
   return CATEGORIES.find((c) => c.match(layer))?.key ?? null;
