@@ -607,6 +607,7 @@ input[type='checkbox'], input[type='radio'] { width: auto; accent-color: var(--a
 .shootday { margin: 12px 0 20px; }
 .shootday .daystrip__row { margin-top: 3px; }
 .shootday__windows li { margin: 2px 0; }
+.viewpreview__map { width: 100%; height: 280px; border-radius: var(--radius); overflow: hidden; border: 1px solid var(--border); }
 
 /* Follow mode: per-row Follow button in the Nearby list, and the pill on the map */
 .nearby__section li { display: flex; align-items: center; gap: 4px; }
