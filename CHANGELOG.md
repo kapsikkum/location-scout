@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/kapsikkum/location-scout/compare/v0.2.0...v0.3.0) (2026-09-29)
+
+
+### Miscellaneous Chores
+
+* release 0.3.0 ([3de3ef5](https://github.com/kapsikkum/location-scout/commit/3de3ef57b1eda412e507bf3467f8f2a8f4c85f01))
+
 ## [0.2.0](https://github.com/kapsikkum/location-scout/compare/v0.1.0...v0.2.0) (2026-09-28)
 
 
