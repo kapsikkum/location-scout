@@ -24,9 +24,9 @@ export function pickRadarFrame(idx: RadarIndex, t: number): RadarFrame | null {
 export const radarTileUrl = (host: string, frame: RadarFrame) => `${host}${frame.path}/256/{z}/{x}/{y}/2/1_1.png`;
 
 /** The forecast hour containing `t` (nearest within 90 min), else null. */
-export function hourAt(f: WeatherForecast | null, t: number): WeatherHour | null {
+export function hourAt<T extends { time: string }>(f: { hourly: T[] } | null, t: number): T | null {
   if (!f) return null;
-  let best: WeatherHour | null = null;
+  let best: T | null = null;
   let bestD = Infinity;
   for (const h of f.hourly) {
     const d = Math.abs(Date.parse(h.time) + 30 * 60_000 - t);
@@ -47,4 +47,70 @@ export function weatherIcon(h: Pick<WeatherHour, 'weatherCode' | 'fogLikely' | '
   if (c === 2) return night ? '☁️' : '⛅';
   if (c === 1) return night ? '🌙' : '🌤';
   return night ? '🌙' : '☀️';
+}
+
+export type BurnLabel = 'Dull' | 'Fair' | 'Vibrant' | 'Fiery';
+
+export interface BurnScoreResult {
+  score: number;
+  label: BurnLabel;
+}
+
+export interface BurnInput {
+  cloudHighPct?: number | null;
+  cloudMidPct?: number | null;
+  cloudLowPct?: number | null;
+  visibilityM?: number | null;
+  aod?: number | null;
+}
+
+/** Predict sunset/sunrise colour score (0-100) and label based on clouds, horizon and atmospheric clarity. */
+export function burnScore(
+  at: BurnInput,
+  horizonLowPct: number | null,
+): BurnScoreResult {
+  const high = at.cloudHighPct != null ? Math.max(0, Math.min(100, at.cloudHighPct)) : 0;
+  const mid = at.cloudMidPct != null ? Math.max(0, Math.min(100, at.cloudMidPct)) : 0;
+  const combined = Math.min(100, high + mid);
+
+  // Canvas = high+mid cloud: trapezoid curve peaking around 30-70%, falling off toward 0% and 100%.
+  let canvas = 0;
+  if (combined >= 30 && combined <= 70) {
+    canvas = 1;
+  } else if (combined < 30) {
+    canvas = combined / 30;
+  } else {
+    canvas = Math.max(0, (100 - combined) / 30);
+  }
+
+  // Curtain = low cloud at spot and horizon: heavy penalty above ~15%.
+  const spotLow = at.cloudLowPct != null ? Math.max(0, Math.min(100, at.cloudLowPct)) : 0;
+  const horizonLow = horizonLowPct != null ? Math.max(0, Math.min(100, horizonLowPct)) : spotLow;
+  const curtainPenalty = (pct: number) => (pct <= 15 ? 1 : Math.max(0, 1 - (pct - 15) / 35));
+  const curtain = curtainPenalty(spotLow) * curtainPenalty(horizonLow);
+
+  // Clarity: visibility under 10 km or aod > 0.4 penalise; ignore when null.
+  let clarity = 1;
+  if (at.visibilityM != null && at.visibilityM < 10_000) {
+    clarity *= Math.max(0, at.visibilityM / 10_000);
+  }
+  if (at.aod != null && at.aod > 0.4) {
+    clarity *= Math.max(0, 1 - (at.aod - 0.4) / 0.6);
+  }
+
+  const rawScore = 100 * canvas * curtain * clarity;
+  const score = Math.max(0, Math.min(100, Math.round(rawScore)));
+
+  let label: BurnLabel = 'Dull';
+  if (score > 75) {
+    label = 'Fiery';
+  } else if (score > 50) {
+    label = 'Vibrant';
+  } else if (score > 20) {
+    label = 'Fair';
+  } else {
+    label = 'Dull';
+  }
+
+  return { score, label };
 }

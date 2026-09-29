@@ -193,6 +193,7 @@ export interface WeatherHour {
   visibilityM: number | null;
   weatherCode: number | null;
   fogLikely: boolean;
+  aod: number | null;
 }
 export interface WeatherForecast { lat: number; lng: number; fetchedAt: string; hourly: WeatherHour[] }
 
