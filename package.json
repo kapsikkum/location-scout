@@ -1,7 +1,7 @@
 {
   "name": "location-scout",
   "private": true,
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Self-hosted map of favourite photography spots and when the light works",
   "workspaces": [
     "server",

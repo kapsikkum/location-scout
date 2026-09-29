@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.3.0](https://github.com/kapsikkum/location-scout/compare/v0.2.0...v0.3.0) (2026-09-29)
+
+
+### Features
+
+Shipped in the v0.2.0 tag but missing from its notes (merged via #11):
+
+* **web:** Sun Anchor bearing planner on the map: place an anchor, drag the bearing, find exact sunrise/sunset alignments (#7)
+* **web:** highlight base-map rail with the train overlay, and show upcoming passes on rail click (#9)
+* **web:** edit place outlines on the map: drag points, click a segment to insert one (#10)
+* **web:** sunlit view-from-the-spot preview on Plan shoot (#6)
+* **web:** Plan shoot reorganised into Best times, The day, and Trains & planes; day chips show weather; Browse nearby replaces the Spots tab
+* **web:** interactive bearing mini-map on Plan shoot with 3D terrain, buildings and satellite; wedges show where the sun rises and sets over the year
+* **web:** bearing results show the year and a match grade (on the line, close, near miss, sun never reaches this bearing)
+
+### Bug Fixes
+
+* **web:** restore train popup contrast (#8)
+* **web:** AM/PM rail pass times; timezone-independent rail pass test; edited sun bearing kept across label changes
+
+### Documentation
+
+* shorter README: what it does, how it works, contributing; API reference moved to docs/api.md (#14)
+
 ## [0.2.0](https://github.com/kapsikkum/location-scout/compare/v0.1.0...v0.2.0) (2026-09-28)
 
 
