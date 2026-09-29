@@ -18,6 +18,7 @@ import { SELECTED_BEARING_PROJECTION_SOURCE } from './sunAnchor.js';
 export const STYLE_URL = 'https://tiles.openfreemap.org/styles/liberty';
 export const ESRI = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}';
 export const TERRARIUM = 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png';
+export const NIGHT_LIGHTS = 'https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/VIIRS_Black_Marble/default/2016-01-01/GoogleMapsCompatible_Level8/{z}/{y}/{x}.png';
 const FONT = ['Noto Sans Regular'];
 
 export const CHILD_SPOT_ZOOM = 13;
@@ -49,6 +50,9 @@ export function initLayers(map: MlMap) {
 
   map.addSource('imagery', { type: 'raster', tiles: [ESRI], tileSize: 256, maxzoom: 17, attribution: 'Imagery © Esri' });
   map.addLayer({ id: 'imagery', type: 'raster', source: 'imagery', layout: { visibility: 'none' } }, firstRoad);
+
+  map.addSource('night-lights', { type: 'raster', tiles: [NIGHT_LIGHTS], tileSize: 256, maxzoom: 8, attribution: 'Night lights © NASA GIBS' });
+  map.addLayer({ id: 'night-lights', type: 'raster', source: 'night-lights', layout: { visibility: 'none' }, paint: { 'raster-opacity': 0.7 } }, firstRoad);
 
   map.addSource('dem', DEM_SOURCE);
   map.addSource('terrain', DEM_SOURCE); // a second source for 3D terrain, as MapLibre recommends

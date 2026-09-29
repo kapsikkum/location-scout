@@ -6,7 +6,7 @@ import { Alignment, alignments, moonPhase, nextGoodWindow, PHASE_LABEL, Phase, s
 import { hhmm, hhmm24, ymd } from '../time.js';
 import DayStrip from '../components/DayStrip.js';
 import ViewPreview from '../components/ViewPreview.js';
-import { bestWindows, buildingShadeAt, lightTimeline, WINDOW_LABEL, type ShadeTest, type Step, type WindowKind } from '../map/shootPlan.js';
+import { bestWindows, buildingShadeAt, lightTimeline, sunLeavesAt, WINDOW_LABEL, type ShadeTest, type Step, type WindowKind } from '../map/shootPlan.js';
 import { terrainShadeForPoint } from '../map/demPoint.js';
 import type { Footprint } from '../map/shadows.js';
 import { CRITERIA, DEFAULT_CRITERIA, parseCriteria, railDistanceKm, recommend, weatherAt, type Criterion, type Recommendation, type WeatherHour, type WeatherResponse } from '../map/recommend.js';
@@ -360,6 +360,28 @@ export default function PlanShoot() {
   const sunriseBadge = sunriseBurn ? `Sunrise: ${sunriseBurn.label} ${sunriseBurn.score}` : null;
   const sunsetBadge = sunsetBurn ? `Sunset: ${sunsetBurn.label} ${sunsetBurn.score}` : null;
 
+  const sunLeavesLine = useMemo(() => {
+    if (!daySteps.length || !rs) return null;
+    const info = sunLeavesAt(daySteps);
+    const parts: string[] = [];
+    if (info.returns && rs.sunrise) {
+      const diffMin = Math.round((info.returns.getTime() - rs.sunrise.time.getTime()) / 60_000);
+      if (diffMin > 5) {
+        const obs = info.returnsObstacle === 'buildings' ? 'buildings' : 'ridge';
+        parts.push(`Sun clears the ${obs} at ${hhmm24(info.returns)}`);
+      }
+    }
+    if (info.leaves && rs.sunset) {
+      const diffMin = Math.round((rs.sunset.time.getTime() - info.leaves.getTime()) / 60_000);
+      if (diffMin > 5) {
+        const obs = info.obstacle === 'buildings' ? 'buildings' : 'terrain';
+        const altStr = info.horizonAlt != null ? ` (ridge ${info.horizonAlt >= 0 ? '+' : ''}${info.horizonAlt.toFixed(1)}°)` : '';
+        parts.push(`Sun behind ${obs} from ${hhmm24(info.leaves)}${altStr}, ${diffMin} min before sunset`);
+      }
+    }
+    return parts.length ? parts.join(' · ') : null;
+  }, [daySteps, rs]);
+
   return (
     <div className="page plan">
       <div className="plan__head no-print">
@@ -521,6 +543,7 @@ export default function PlanShoot() {
             <h3>Light</h3>
             <DayStrip lat={plan.lat} lng={plan.lng} time={focus} sunriseBadge={sunriseBadge} sunsetBadge={sunsetBadge} />
             {!shadeReady ? <p className="hint">Working out sun and shade…</p> : <LightStrip steps={daySteps} day={focusDay} />}
+            {sunLeavesLine && <p className="hint">{sunLeavesLine}</p>}
             <p className="hint">
               <span style={{ color: LIGHT_COLOR.sun }}>■</span> sun <span style={{ color: LIGHT_COLOR.shade }}>■</span> shade (terrain{terrain ? '' : ' unavailable'}, buildings{buildings === 'loading' ? '…' : buildings ? '' : ' unavailable'}) ·
               best: <span style={{ color: WINDOW_COLOR['golden-sun'] }}>■</span> golden on spot <span style={{ color: WINDOW_COLOR['even-shade'] }}>■</span> open shade
@@ -584,6 +607,7 @@ export default function PlanShoot() {
           </div>
           <h2>Sun &amp; moon · {dayLabel(focusDay)}</h2>
           <p>Sunrise {rs?.sunrise ? `${hhmm(rs.sunrise.time)} (${Math.round(rs.sunrise.azimuth)}°)` : '—'}{sunriseBadge ? ` · ${sunriseBadge}` : ''} · Sunset {rs?.sunset ? `${hhmm(rs.sunset.time)} (${Math.round(rs.sunset.azimuth)}°)` : '—'}{sunsetBadge ? ` · ${sunsetBadge}` : ''} · {mp.name}, {Math.round(mp.fraction * 100)}% lit</p>
+          {sunLeavesLine && <p>{sunLeavesLine}</p>}
           {daySteps.length > 0 && <ul>{bestWindows(daySteps).map((w) => <li key={w.start.getTime()}>{WINDOW_LABEL[w.kind]} {hhmm(w.start)}–{hhmm(w.end)}</li>)}</ul>}
           <h2>Weather at {hhmm(focus)}</h2>
           <p>{focusWx ? `${Math.round(focusWx.tempC)}°C · cloud ${Math.round(focusWx.cloudPct)}% (low ${Math.round(focusWx.cloudLowPct)} / mid ${Math.round(focusWx.cloudMidPct)} / high ${Math.round(focusWx.cloudHighPct)}) · rain ${Math.round(focusWx.precipProbPct)}% · wind ${Math.round(focusWx.windKmh)} km/h, gusts ${Math.round(focusWx.gustKmh)}${focusWx.fogLikely ? ' · fog likely' : ''}` : 'No forecast.'}</p>

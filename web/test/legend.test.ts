@@ -18,6 +18,7 @@ const layers = [
   { id: 'poi_r1', type: 'symbol', 'source-layer': 'poi' },
   { id: 'rail-lines', type: 'line', source: 'rail' },
   { id: 'rays', type: 'line', source: 'rays' },
+  { id: 'night-lights', type: 'raster' },
   { id: 'background', type: 'background' },
 ];
 
@@ -26,7 +27,7 @@ test('classifies base style and overlay layers', () => {
   assert.deepEqual(got, {
     road_motorway: 'roads', road_major_rail: 'rail-base', tunnel_transit_rail: 'rail-base', road_path_pedestrian: 'paths',
     water: 'water', waterway_river: 'water', waterway_line_label: 'labels', 'building-3d': 'buildings', boundary_2: 'boundaries',
-    park: 'landuse', label_town: 'labels', poi_r1: 'pois', 'rail-lines': 'rail', rays: 'sun', background: null,
+    park: 'landuse', label_town: 'labels', poi_r1: 'pois', 'rail-lines': 'rail', rays: 'sun', 'night-lights': 'night-lights', background: null,
   });
   assert.deepEqual(groupLayers(layers).water, ['water', 'waterway_river']);
 });

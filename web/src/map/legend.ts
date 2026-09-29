@@ -53,6 +53,7 @@ export const CATEGORIES: Category[] = [
   { key: 'spots', label: 'Spots & photo thumbnails', group: 'Overlays', swatch: 'dot', color: '#4cc3ff', defaultOn: true,
     match: ids('spot-points', 'spot-label', 'spot-thumbs', 'place-spots', 'place-spots-label', 'place-spot-thumbs', 'clusters', 'cluster-count') },
   { key: 'imagery', label: 'Satellite imagery', group: 'Overlays', swatch: 'fill', color: '#3b5a3a', defaultOn: false, match: ids('imagery') },
+  { key: 'night-lights', label: 'Night lights', group: 'Overlays', swatch: 'fill', color: '#ffd23f', defaultOn: false, match: ids('night-lights') },
   { key: 'terrain', label: 'Terrain shading', group: 'Overlays', swatch: 'fill', color: '#5a5f6e', defaultOn: true, match: ids('hillshade', 'terrain-shadow') },
   { key: 'shadows', label: 'Building shadows', group: 'Overlays', swatch: 'fill', color: '#0a0c1a', paintProp: 'fill-color', defaultOn: true, match: ids('shadows') },
   { key: 'outlines', label: 'Place outlines', group: 'Overlays', swatch: 'line', color: '#f5a623', paintProp: 'line-color', defaultOn: true, match: ids('place-fill', 'place-line') },

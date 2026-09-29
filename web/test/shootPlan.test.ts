@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { bestWindows, buildingShadeAt, lightTimeline, terrainShadeAt } from '../src/map/shootPlan.js';
+import { bestWindows, buildingShadeAt, lightTimeline, sunLeavesAt, terrainShadeAt, type Step } from '../src/map/shootPlan.js';
 import { fillRings, stitch3x3, tileBounds, tileRings, upsampleMask, worldPx } from '../src/map/terrainShadow.js';
 
 const LAT = 51.5, LNG = -0.12; // London (test runs in the machine's zone; midsummer keeps phases present anyway)
@@ -89,4 +89,40 @@ test('stitch3x3: null centre is null; missing neighbours reuse the centre', () =
   const g = stitch3x3([null, null, null, null, c, null, null, null, null])!;
   assert.equal(g.width, 768);
   assert.equal(g.data[0], 7);
+});
+
+test('sunLeavesAt: unshaded day returns nulls', () => {
+  const steps = lightTimeline(DAY, LAT, LNG, {});
+  const res = sunLeavesAt(steps);
+  assert.equal(res.leaves, null);
+  assert.equal(res.returns, null);
+  assert.equal(res.horizonAlt, null);
+});
+
+// Synthetic day (independent of the machine's zone): sun up 06:00-18:00, altitude rises then falls, 10-min steps.
+function synthDay(shade: (min: number) => 'terrain' | 'buildings' | null): Step[] {
+  const out: Step[] = [];
+  for (let m = 0; m < 1440; m += 10) {
+    const altitude = 40 * Math.sin(((m - 360) / 720) * Math.PI), up = altitude > 0, by = up ? shade(m) : null;
+    out.push({ t: new Date(Date.UTC(2026, 0, 1, 0, m)), phase: up ? 'day' : 'night', azimuth: m / 4, altitude,
+      light: !up ? 'night' : by ? 'shade' : 'sun', terrain: by === 'terrain', buildings: by === 'buildings' });
+  }
+  return out;
+}
+
+test('sunLeavesAt: morning ridge delay and evening ridge early departure', () => {
+  const res = sunLeavesAt(synthDay((m) => (m < 480 || m >= 1020 ? 'terrain' : null)));
+  assert.equal(res.returns?.getUTCHours(), 8);
+  assert.equal(res.leaves?.getUTCHours(), 17);
+  assert.ok(typeof res.horizonAlt === 'number' && res.horizonAlt > 0);
+  assert.equal(res.obstacle, 'terrain');
+  assert.equal(res.returnsObstacle, 'terrain');
+});
+
+test('sunLeavesAt: building shade in afternoon', () => {
+  const res = sunLeavesAt(synthDay((m) => (m >= 960 ? 'buildings' : null)));
+  assert.equal(res.returns, null);
+  assert.equal(res.leaves?.getUTCHours(), 16);
+  assert.equal(res.obstacle, 'buildings');
+  assert.ok(typeof res.horizonAlt === 'number' && res.horizonAlt > 0);
 });
