@@ -29,7 +29,10 @@ test('buildRailPassPopupHtml escapes train text and shows configured/no-pass sta
   assert.match(html, /&lt;T1&gt;/);
   assert.match(html, /Central &amp; &quot;City&quot;/);
   assert.doesNotMatch(html, /<T1>/);
-  assert.match(html, /8:05 PM Jan 5/);
+  // Times render in the viewer's local zone, so build the expectation the same way rather than assuming Sydney.
+  const at = new Date(pass.at);
+  const expected = at.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
+  assert.ok(html.includes(`>${expected}`), `expected ${expected} in ${html}`);
 
   assert.match(buildRailPassPopupHtml({ configured: false, passes: [] }), /not configured/i);
   assert.match(buildRailPassPopupHtml({ configured: true, passes: [] }), /No scheduled passenger trains/i);

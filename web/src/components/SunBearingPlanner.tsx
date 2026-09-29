@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useState } from 'react';
+import { useDeferredValue, useEffect, useId, useMemo, useState } from 'react';
 import {
   displayedSunBearingHits,
   planSunBearing,
@@ -46,7 +46,7 @@ export default function SunBearingPlanner({ lat, lng, defaultBearingDeg, label, 
     setBearingEdited(false);
     setBearing(defaultBearingDeg == null ? '' : String(Math.round(defaultBearingDeg)));
     setExpanded(false);
-  }, [lat, lng, label]);
+  }, [lat, lng]);
 
   useEffect(() => {
     if (!bearingEdited) {
@@ -55,7 +55,8 @@ export default function SunBearingPlanner({ lat, lng, defaultBearingDeg, label, 
     }
   }, [bearingEdited, defaultBearingDeg]);
 
-  const bearingNum = Number(bearing);
+  // Deferred so typing stays responsive while the year-long search catches up.
+  const bearingNum = Number(useDeferredValue(bearing));
   const today = ymd(new Date());
   const results = useMemo(() => {
     if (!Number.isFinite(bearingNum)) return [];
