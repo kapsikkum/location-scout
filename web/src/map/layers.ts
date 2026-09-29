@@ -263,11 +263,13 @@ export function initFeedLayers(map: MlMap) {
   });
 
   // NSW Live Traffic cameras: a camera glyph (places are plain dots) with a cone the way it looks.
+  // The cone is a screen-sized icon rotated to the bearing, so it stays small at any zoom.
   if (!map.hasImage('camera')) map.addImage('camera', cameraIcon(), { pixelRatio: 2 });
-  map.addSource('camera-cones', { type: 'geojson', data: empty() });
-  map.addLayer({ id: 'camera-cones', type: 'fill', source: 'camera-cones', layout: { visibility: 'none' },
-    paint: { 'fill-color': '#38bdf8', 'fill-opacity': 0.18, 'fill-outline-color': '#38bdf8' } });
+  if (!map.hasImage('camera-cone')) map.addImage('camera-cone', cameraConeIcon(), { pixelRatio: 2 });
   map.addSource('cameras', { type: 'geojson', data: empty(), attribution: '© Transport for NSW' });
+  map.addLayer({ id: 'camera-cones', type: 'symbol', source: 'cameras', filter: ['has', 'bearing'],
+    layout: { visibility: 'none', 'icon-image': 'camera-cone', 'icon-rotate': ['get', 'bearing'], 'icon-rotation-alignment': 'map',
+      'icon-allow-overlap': true, 'icon-ignore-placement': true } });
   map.addLayer({ id: 'cameras', type: 'symbol', source: 'cameras',
     layout: { visibility: 'none', 'icon-image': 'camera', 'icon-allow-overlap': true, 'icon-ignore-placement': true } });
 }
@@ -437,6 +439,7 @@ export function camerasGeoJSON(cameras: TrafficCamera[]): GeoJSON.FeatureCollect
         title: c.title,
         view: c.view,
         direction: c.direction,
+        ...(bearingOf(c) != null ? { bearing: bearingOf(c) } : {}),
         region: c.region,
         imageUrl: c.imageUrl,
       },
@@ -448,19 +451,23 @@ export function camerasGeoJSON(cameras: TrafficCamera[]): GeoJSON.FeatureCollect
   };
 }
 
-/** 60° cones 350 m long for cameras whose facing is known. */
-export function cameraConesGeoJSON(cameras: TrafficCamera[]): GeoJSON.FeatureCollection {
-  const features: GeoJSON.Feature[] = [];
-  for (const c of cameras) {
-    const b = cameraBearing(c.direction ?? '', c.view ?? '');
-    if (b != null) features.push({ type: 'Feature', properties: { id: c.id }, geometry: { type: 'Polygon', coordinates: [wedge(c.point[1], c.point[0], b, 60, 0.35)] } });
-  }
-  return { type: 'FeatureCollection', features };
-}
+const bearingOf = (c: TrafficCamera) => cameraBearing(c.direction ?? '', c.view ?? '');
 
 export function updateCameras(map: MlMap, cameras: TrafficCamera[]) {
   setData(map, 'cameras', camerasGeoJSON(cameras));
-  setData(map, 'camera-cones', cameraConesGeoJSON(cameras));
+}
+
+/** A 60° wedge pointing up from the image centre (the camera), fading out over 32 px; drawn at 2x. */
+function cameraConeIcon(): ImageData {
+  const c = document.createElement('canvas');
+  c.width = c.height = 128;
+  const g = c.getContext('2d')!;
+  const fade = g.createRadialGradient(64, 64, 0, 64, 64, 64);
+  fade.addColorStop(0, 'rgba(56,189,248,0.55)');
+  fade.addColorStop(1, 'rgba(56,189,248,0)');
+  g.fillStyle = fade;
+  g.beginPath(); g.moveTo(64, 64); g.arc(64, 64, 64, -Math.PI / 2 - Math.PI / 6, -Math.PI / 2 + Math.PI / 6); g.closePath(); g.fill();
+  return g.getImageData(0, 0, 128, 128);
 }
 
 /** Sky-blue camera on a dark disc, drawn at 2x. */
