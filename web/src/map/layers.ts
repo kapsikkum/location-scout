@@ -52,7 +52,7 @@ export function initLayers(map: MlMap) {
   map.addLayer({ id: 'imagery', type: 'raster', source: 'imagery', layout: { visibility: 'none' } }, firstRoad);
 
   map.addSource('night-lights', { type: 'raster', tiles: [NIGHT_LIGHTS], tileSize: 256, maxzoom: 8, attribution: 'Night lights © NASA GIBS' });
-  map.addLayer({ id: 'night-lights', type: 'raster', source: 'night-lights', layout: { visibility: 'none' }, paint: { 'raster-opacity': 0.7 } }, firstRoad);
+  map.addLayer({ id: 'night-lights', type: 'raster', source: 'night-lights', layout: { visibility: 'none' }, paint: { 'raster-opacity': 0 } }, firstRoad);
 
   map.addSource('dem', DEM_SOURCE);
   map.addSource('terrain', DEM_SOURCE); // a second source for 3D terrain, as MapLibre recommends
@@ -514,6 +514,8 @@ export function updateMood(map: MlMap, sun: { azimuth: number; altitude: number 
   paint(map, 'mood', 'fill-color', mood.color);
   paint(map, 'mood', 'fill-opacity', mood.opacity);
   paint(map, 'imagery', 'raster-brightness-max', Math.max(0.35, 1 - mood.opacity * 0.9));
+  // Night lights only mean something after dark: none while the sun is up, full from the end of civil twilight (-6°).
+  paint(map, 'night-lights', 'raster-opacity', 0.7 * Math.min(1, Math.max(0, -sun.altitude / 6)));
   // 3D buildings: lit from the sun's direction, warm near the horizon, dim and flat at night.
   const light: LightSpecification = {
     anchor: 'map',
