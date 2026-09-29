@@ -1,6 +1,6 @@
 /** MapLibre sources and layers: base extras (imagery, DEM), light (mood, rays, shadows) and our places/spots. */
 import { GeoJSONSource, Map as MlMap, type RasterTileSource, type LightSpecification } from 'maplibre-gl';
-import type { Place, Spot } from '../api.js';
+import type { FireIncident, Place, Spot } from '../api.js';
 import { ICON, thumbIconId } from './spotGlance.js';
 import { destination, wedge } from './geo.js';
 import { buildingShadows, MIN_SHADOW_ALT, type Footprint } from './shadows.js';
@@ -239,6 +239,28 @@ export function initFeedLayers(map: MlMap) {
   map.addSource('candidates', { type: 'geojson', data: empty() });
   map.addLayer({ id: 'candidates', type: 'circle', source: 'candidates', layout: { visibility: 'none' },
     paint: { 'circle-radius': 6, 'circle-color': '#6b7280', 'circle-opacity': 0.55, 'circle-stroke-color': '#e9ecf3', 'circle-stroke-width': 1, 'circle-stroke-opacity': 0.6 } });
+
+  // NSW RFS fire incidents: points coloured by alert level + polygons outlined
+  const FIRE_COLOR = ['match', ['get', 'category'], 'Emergency Warning', '#ef4444', 'Emergency', '#ef4444', 'Watch and Act', '#f97316', 'Advice', '#eab308', '#9ca3af'] as any;
+  map.addSource('fires', { type: 'geojson', data: empty(), attribution: '© NSW RFS' });
+  map.addLayer({
+    id: 'fires-polys-fill', type: 'fill', source: 'fires',
+    filter: ['any', ['==', ['geometry-type'], 'Polygon'], ['==', ['geometry-type'], 'MultiPolygon']],
+    layout: { visibility: 'none' },
+    paint: { 'fill-color': FIRE_COLOR, 'fill-opacity': 0.15 },
+  });
+  map.addLayer({
+    id: 'fires-polys-line', type: 'line', source: 'fires',
+    filter: ['any', ['==', ['geometry-type'], 'Polygon'], ['==', ['geometry-type'], 'MultiPolygon']],
+    layout: { visibility: 'none' },
+    paint: { 'line-color': FIRE_COLOR, 'line-width': 2 },
+  });
+  map.addLayer({
+    id: 'fires-pts', type: 'circle', source: 'fires',
+    filter: ['==', ['geometry-type'], 'Point'],
+    layout: { visibility: 'none' },
+    paint: { 'circle-radius': 6, 'circle-color': FIRE_COLOR, 'circle-stroke-color': '#0e1014', 'circle-stroke-width': 1.5 },
+  });
 }
 
 /** Layers the user has switched off (legend/chips); code that toggles visibility itself must respect this. */
@@ -344,7 +366,58 @@ export function updateCandidates(map: MlMap, candidates: { id: string; name: str
   })) });
 }
 
-export const CLICKABLE = ['spot-thumbs', 'place-spot-thumbs', 'spot-points', 'place-spots', 'clusters', 'place-points', 'place-fill', 'place-line', 'candidates'];
+export const FIRE_LAYERS = ['fires-polys-fill', 'fires-polys-line', 'fires-pts'];
+
+export function extractFireGeometries(geom: GeoJSON.Geometry): { point: GeoJSON.Point | null; polygons: (GeoJSON.Polygon | GeoJSON.MultiPolygon)[] } {
+  let point: GeoJSON.Point | null = null;
+  const polygons: (GeoJSON.Polygon | GeoJSON.MultiPolygon)[] = [];
+  function walk(g: GeoJSON.Geometry) {
+    if (g.type === 'Point' && !point) point = g;
+    else if (g.type === 'Polygon' || g.type === 'MultiPolygon') polygons.push(g);
+    else if (g.type === 'GeometryCollection') g.geometries.forEach(walk);
+  }
+  walk(geom);
+  return { point, polygons };
+}
+
+export function firesGeoJSON(incidents: FireIncident[]): GeoJSON.FeatureCollection {
+  const features: GeoJSON.Feature[] = [];
+  for (const inc of incidents) {
+    const p = {
+      id: inc.id,
+      title: inc.title,
+      category: inc.category,
+      status: inc.status,
+      sizeHa: inc.sizeHa,
+      updated: inc.updated,
+      link: inc.link,
+    };
+    const { point, polygons } = extractFireGeometries(inc.geometry);
+    if (point) {
+      features.push({
+        type: 'Feature',
+        id: `${inc.id}-pt`,
+        properties: p,
+        geometry: point,
+      });
+    }
+    polygons.forEach((poly, i) => {
+      features.push({
+        type: 'Feature',
+        id: `${inc.id}-poly-${i}`,
+        properties: p,
+        geometry: poly,
+      });
+    });
+  }
+  return { type: 'FeatureCollection', features };
+}
+
+export function updateFires(map: MlMap, fires: FireIncident[]) {
+  setData(map, 'fires', firesGeoJSON(fires));
+}
+
+export const CLICKABLE = ['spot-thumbs', 'place-spot-thumbs', 'spot-points', 'place-spots', 'clusters', 'place-points', 'place-fill', 'place-line', 'candidates', 'fires-pts', 'fires-polys-fill', 'fires-polys-line'];
 
 export function setImagery(map: MlMap, on: boolean) {
   map.setLayoutProperty('imagery', 'visibility', on ? 'visible' : 'none');

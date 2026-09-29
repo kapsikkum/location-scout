@@ -19,6 +19,8 @@ import { bboxFromRadius, haversine, parseBbox, parseLatLng } from './geo.js';
 import { parseGoodTimes, GoodTimesError, DEFAULT_GOOD_TIMES } from './goodTimes.js';
 import { fetchPlanes } from './feeds/planes.js';
 import { fetchWeather } from './feeds/weather.js';
+import { fetchFires } from './feeds/rfs.js';
+import { fetchAurora } from './feeds/spaceWeather.js';
 import { fetchBuildings } from './sources/osm.js';
 import {
   buildPointPassesResponse, combinedFeedData, combinedRealtime, emptyFeedData, nextPasses, parsePointPassRequest, predictTrainPositions, tripCount, TRAIN_FEEDS,
@@ -663,6 +665,22 @@ app.get('/api/weather', async (req, res, next) => {
     if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) return res.status(400).json({ error: 'lat and lng are required' });
     const baseUrl = process.env.OPEN_METEO_URL ?? 'https://api.open-meteo.com';
     res.json(await fetchWeather(baseUrl, lat, lng, Number.isFinite(days) ? days : 7));
+  } catch (err) { next(err); }
+});
+
+// --- fires (NSW RFS) ----------------------------------------------------
+
+app.get('/api/fires', async (_req, res, next) => {
+  try {
+    res.json(await fetchFires());
+  } catch (err) { next(err); }
+});
+
+// --- aurora (NOAA space weather) ----------------------------------------
+
+app.get('/api/aurora', async (_req, res, next) => {
+  try {
+    res.json(await fetchAurora());
   } catch (err) { next(err); }
 });
 

@@ -3,12 +3,12 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { GeoJSONSource, LngLatBounds, Map as MlMap, MapMouseEvent, Marker, NavigationControl, Popup, ScaleControl, setWorkerUrl } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
-import { api, Candidate, Place, Plane, Spot, TrainPosition, User, type WeatherForecast } from '../api.js';
+import { api, Candidate, FireIncident, Place, Plane, Spot, TrainPosition, User, type WeatherForecast } from '../api.js';
 import { hourAt, pickRadarFrame, RAINVIEWER_INDEX, radarTileUrl, weatherIcon, type RadarIndex } from '../map/weather.js';
 import {
   CLICKABLE, initFeedLayers, initLayers, PLANE_LAYERS, setImagery, setLayerVisible, setTerrain3d, STYLE_URL, updateCandidates, updateDraft,
   updateMood, updatePlacesAndSpots, updatePlanes, updateRail, updateRays, setNearbyHighlight, updateShadows, updateTrains, updateWedges,
-  TRAIN_LAYERS, setTrains3d, updatePlanePositions, hiddenLayers, setRadarFrame,
+  TRAIN_LAYERS, setTrains3d, updatePlanePositions, hiddenLayers, setRadarFrame, FIRE_LAYERS, updateFires,
 } from '../map/layers.js';
 import { due, MotionTracker, planePredict, trainPredict } from '../map/motion.js';
 import { carriageCount } from '../map/trains3d.js';
@@ -64,7 +64,7 @@ const newSpot = (lat: number, lng: number, placeId: string | null = null): SpotD
 });
 
 /** Legend keys whose visibility is applied by their own effect below. */
-const FEED_KEYS = ['imagery', 'planes', 'rail', 'trains', 'candidates', 'weather'];
+const FEED_KEYS = ['imagery', 'planes', 'rail', 'trains', 'candidates', 'weather', 'fires'];
 const RADAR_POLL_MS = 10 * 60_000;
 
 export default function MapPage({ user }: { user: User | null }) {
@@ -106,11 +106,12 @@ export default function MapPage({ user }: { user: User | null }) {
   const [vis, setVis] = useState<Visibility>(loadVisibility);
   useEffect(() => saveVisibility(vis), [vis]);
   const toggle = (key: string, on = !vis[key]) => setVis((v) => ({ ...v, [key]: on }));
-  const { planes: planesOn, rail: railOn, trains: trainsOn, candidates: candidatesOn, imagery, weather: weatherOn } = vis;
+  const { planes: planesOn, rail: railOn, trains: trainsOn, candidates: candidatesOn, imagery, weather: weatherOn, fires: firesOn } = vis;
   const railEffectiveOn = effectiveRailOn(railOn, trainsOn);
   const baseRailPaint = useRef<BaseRailPaintSnapshot[] | null>(null);
   const [rail, setRail] = useState<GeoJSON.FeatureCollection | null>(null);
   const [candidates, setCandidates] = useState<Candidate[]>([]);
+  const [fires, setFires] = useState<FireIncident[]>([]);
   const [planeData, setPlaneData] = useState<Plane[]>([]);
   const [trainData, setTrainData] = useState<TrainPosition[]>([]);
 
@@ -259,6 +260,21 @@ export default function MapPage({ user }: { user: User | null }) {
     api.candidates(`${b.getSouth()},${b.getWest()},${b.getNorth()},${b.getEast()}`).then((c) => { if (!stop) { setCandidates(c); updateCandidates(map, c); } }).catch(() => {});
     return () => { stop = true; };
   }, [map, candidatesOn, view]);
+
+  // NSW RFS fire incidents: fetched on mount and polled every 5 min.
+  useEffect(() => {
+    let stop = false;
+    const load = () => api.fires().then((data) => { if (!stop) setFires(data); }).catch(() => {});
+    load();
+    const id = setInterval(load, 5 * 60_000);
+    return () => { stop = true; clearInterval(id); };
+  }, []);
+
+  useEffect(() => {
+    if (!map) return;
+    setLayerVisible(map, FIRE_LAYERS, !!firesOn);
+    if (firesOn) updateFires(map, fires);
+  }, [map, firesOn, fires]);
 
   // Animation: move planes and trains between polls, at most every FRAME_MS, and only for shown layers.
   const trainById = useMemo(() => new Map(trainData.map((t) => [t.tripId, t])), [trainData]);
@@ -540,6 +556,10 @@ export default function MapPage({ user }: { user: User | null }) {
     const hit = map.queryRenderedFeatures(e.point, { layers: CLICKABLE.filter((l) => map.getLayer(l)) })[0];
     if (!hit) return setSelected(null);
     const id = hit.properties?.id as string;
+    if (FIRE_LAYERS.includes(hit.layer.id)) {
+      showFirePopup(map, [lng, lat], hit.properties ?? {});
+      return;
+    }
     if (hit.layer.id === 'clusters') {
       (map.getSource('spots') as GeoJSONSource).getClusterExpansionZoom(hit.properties.cluster_id)
         .then((zoom) => map.easeTo({ center: (hit.geometry as GeoJSON.Point).coordinates as [number, number], zoom }));
@@ -754,7 +774,7 @@ export default function MapPage({ user }: { user: User | null }) {
           )}
           {!editing && selectedSpot && (
             <>
-              <SpotPanel spot={selectedSpot} place={places.find((p) => p.id === selectedSpot.placeId)} time={time}
+              <SpotPanel spot={selectedSpot} place={places.find((p) => p.id === selectedSpot.placeId)} time={time} fires={fires}
                 canEdit={canEdit(selectedSpot.ownerId)}
                 onEdit={() => { setEditing({ type: 'spot', draft: { ...selectedSpot } }); focus(selectedSpot.lng, selectedSpot.lat); }}
                 onDelete={() => void deleteSpot(selectedSpot)}
@@ -864,6 +884,18 @@ function showRailPassPopup(map: MlMap, lat: number, lng: number) {
     .catch((err) => {
       if (trainPopup.current === popup) popup.setHTML(`<div role="alert"><strong>Passenger trains</strong><br/><span>${escapeHtml((err as Error).message)}</span></div>`);
     });
+}
+
+function showFirePopup(map: MlMap, at: [number, number], p: Record<string, any>) {
+  const title = escapeHtml(String(p.title || 'Fire Incident'));
+  const cat = escapeHtml(String(p.category || ''));
+  const status = escapeHtml(String(p.status || ''));
+  const size = p.sizeHa != null ? ` · ${p.sizeHa} ha` : '';
+  const link = p.link ? `<br/><a href="${escapeHtml(String(p.link))}" target="_blank" rel="noopener noreferrer">RFS incident details</a>` : '';
+  const html = `<strong>${title}</strong>${cat ? ` · <span>${cat}</span>` : ''}<br/>`
+    + (status ? `<span>Status: ${status}${size}</span>` : '')
+    + link;
+  openPopup(map, at, html);
 }
 
 function openPopup(map: MlMap, at: [number, number], html: string, onFollow?: () => void) {

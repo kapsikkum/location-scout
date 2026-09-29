@@ -55,3 +55,5 @@ Same auth rules as above.
 | GET | `/api/candidates?bbox=` | OSM candidate points of interest. |
 | POST | `/api/candidates/:id/promote` | Turn a candidate into a spot. |
 | GET | `/api/spots/:id/commons` | Wikimedia Commons photos near the spot, cached 1 day. |
+| GET | `/api/fires` | NSW RFS major incidents (fires), cached 5 min. |
+| GET | `/api/aurora` | NOAA planetary K-index (now + next 24h max), cached 30 min. |

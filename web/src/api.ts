@@ -108,6 +108,22 @@ export interface VersionInfo {
   display: string;
 }
 
+export interface FireIncident {
+  id: string;
+  title: string;
+  category: string;
+  status: string;
+  sizeHa?: number;
+  updated: string;
+  link: string;
+  geometry: GeoJSON.Geometry;
+}
+
+export interface AuroraData {
+  kpNow: number | null;
+  kpMaxNext24h: number | null;
+}
+
 export interface Remote {
   id: string;
   owner_id: string;
@@ -287,6 +303,10 @@ export const api = {
 
   // --- weather (Open-Meteo, hourly, UTC) ---
   weather: (lat: number, lng: number, days = 7) => fetch(`/api/weather?lat=${lat}&lng=${lng}&days=${days}`).then((r) => json<WeatherForecast>(r)),
+  // --- fires (NSW RFS) ---
+  fires: () => fetch('/api/fires').then((r) => json<FireIncident[]>(r)),
+  // --- aurora (NOAA space weather) ---
+  aurora: () => fetch('/api/aurora').then((r) => json<AuroraData>(r)),
   // --- planes ---
   planes: (lat: number, lng: number, nm = 40) => fetch(`/api/planes?lat=${lat}&lng=${lng}&nm=${nm}`).then((r) => json<Plane[]>(r)),
   buildings: (lat: number, lng: number, r = 250) => fetch(`/api/buildings?lat=${lat}&lng=${lng}&r=${r}`).then((r) => json<GeoJSON.FeatureCollection>(r)),
