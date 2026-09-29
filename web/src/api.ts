@@ -146,6 +146,28 @@ export interface PlaneInfo {
   destination: string | null;
 }
 
+export interface MarineHour {
+  time: string;
+  seaLevelHeightMsl: number | null;
+  waveHeight: number | null;
+  waveDirection: number | null;
+  wavePeriod: number | null;
+  swellWaveHeight: number | null;
+  swellWaveDirection: number | null;
+}
+
+export interface TideExtreme {
+  type: 'high' | 'low';
+  time: string;
+  height: number;
+}
+
+export interface MarineData {
+  coastal: boolean;
+  hourly?: MarineHour[];
+  tides?: TideExtreme[];
+}
+
 export interface RailFeature extends GeoJSON.Feature { properties: { id: string; kind: 'rail' | 'industrial' | 'mine' | 'works'; usage?: string; service?: string; name?: string } }
 
 export interface TrainPosition {
@@ -312,6 +334,8 @@ export const api = {
 
   // --- weather (Open-Meteo, hourly, UTC) ---
   weather: (lat: number, lng: number, days = 7) => fetch(`/api/weather?lat=${lat}&lng=${lng}&days=${days}`).then((r) => json<WeatherForecast>(r)),
+  // --- marine (Open-Meteo, tides & swell) ---
+  marine: (lat: number, lng: number) => fetch(`/api/marine?lat=${lat}&lng=${lng}`).then((r) => json<MarineData>(r)),
   // --- fires (NSW RFS) ---
   fires: () => fetch('/api/fires').then((r) => json<FireIncident[]>(r)),
   // --- aurora (NOAA space weather) ---

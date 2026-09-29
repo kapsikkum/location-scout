@@ -1,5 +1,5 @@
 /** Weather for Plan shoot: api.weather (Open-Meteo via GET /api/weather), with missing values filled so scoring stays numeric. */
-import { api, type WeatherHour as ApiWeatherHour } from '../api.js';
+import { api, type WeatherHour as ApiWeatherHour, type MarineData, type MarineHour } from '../api.js';
 import type { WeatherHour, WeatherResponse } from '../map/recommend.js';
 
 export interface PlanWeatherHour extends WeatherHour {
@@ -24,4 +24,71 @@ export function normaliseHour(h: ApiWeatherHour): PlanWeatherHour {
 export async function fetchWeather(lat: number, lng: number, days = 7): Promise<PlanWeatherResponse> {
   const w = await api.weather(lat, lng, days);
   return { ...w, hourly: w.hourly.map(normaliseHour) };
+}
+
+export async function fetchMarine(lat: number, lng: number): Promise<MarineData> {
+  return api.marine(lat, lng);
+}
+
+const COMPASS = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW'];
+export function compassDir(deg: number): string {
+  return COMPASS[Math.round((((deg % 360) + 360) % 360) / 22.5) % 16];
+}
+
+/** Format tides and swell for a coastal spot on a specific day: e.g. "Low 06:42 (0.3 m) · High 12:58 (1.6 m) · Swell 1.8 m SE 11 s". */
+export function formatMarineDay(
+  marine: MarineData | null | undefined,
+  day: Date,
+  focusTime?: Date,
+): string | null {
+  if (!marine || !marine.coastal) return null;
+
+  const tideParts: string[] = [];
+  if (marine.tides) {
+    for (const t of marine.tides) {
+      const d = new Date(t.time);
+      if (
+        d.getFullYear() === day.getFullYear() &&
+        d.getMonth() === day.getMonth() &&
+        d.getDate() === day.getDate()
+      ) {
+        const hh = String(d.getHours()).padStart(2, '0');
+        const mm = String(d.getMinutes()).padStart(2, '0');
+        const label = t.type === 'high' ? 'High' : 'Low';
+        tideParts.push(`${label} ${hh}:${mm} (${t.height.toFixed(1)} m)`);
+      }
+    }
+  }
+
+  let swellStr: string | null = null;
+  if (marine.hourly && marine.hourly.length > 0) {
+    const targetMs = (focusTime ?? new Date(day.getFullYear(), day.getMonth(), day.getDate(), 12)).getTime();
+    let bestHour: MarineHour | null = null;
+    let minDiff = Infinity;
+    for (const h of marine.hourly) {
+      const diff = Math.abs(new Date(h.time).getTime() - targetMs);
+      if (diff < minDiff) {
+        minDiff = diff;
+        bestHour = h;
+      }
+    }
+
+    if (bestHour && minDiff < 43_200_000) {
+      const height = bestHour.swellWaveHeight ?? bestHour.waveHeight;
+      const dir = bestHour.swellWaveDirection ?? bestHour.waveDirection;
+      const period = bestHour.wavePeriod;
+
+      const swellTokens: string[] = [];
+      if (height != null) swellTokens.push(`${height.toFixed(1)} m`);
+      if (dir != null) swellTokens.push(compassDir(dir));
+      if (period != null) swellTokens.push(`${Math.round(period)} s`);
+
+      if (swellTokens.length > 0) {
+        swellStr = `Swell ${swellTokens.join(' ')}`;
+      }
+    }
+  }
+
+  const parts = [...tideParts, ...(swellStr ? [swellStr] : [])];
+  return parts.length ? parts.join(' · ') : null;
 }

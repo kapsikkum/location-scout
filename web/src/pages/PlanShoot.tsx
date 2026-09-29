@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { api, Plane, Settings, Spot, TrainPass } from '../api.js';
+import { api, MarineData, Plane, Settings, Spot, TrainPass } from '../api.js';
 import { destination, haversineKm } from '../map/geo.js';
 import { Alignment, alignments, moonPhase, nextGoodWindow, PHASE_LABEL, Phase, sunriseSunset } from '../map/sun.js';
 import { hhmm, hhmm24, ymd } from '../time.js';
@@ -10,7 +10,7 @@ import { bestWindows, buildingShadeAt, lightTimeline, sunLeavesAt, WINDOW_LABEL,
 import { terrainShadeForPoint } from '../map/demPoint.js';
 import type { Footprint } from '../map/shadows.js';
 import { CRITERIA, DEFAULT_CRITERIA, parseCriteria, railDistanceKm, recommend, weatherAt, type Criterion, type Recommendation, type WeatherHour, type WeatherResponse } from '../map/recommend.js';
-import { fetchWeather, type PlanWeatherResponse } from './planWeather.js';
+import { fetchWeather, fetchMarine, formatMarineDay, type PlanWeatherResponse } from './planWeather.js';
 import { burnScore, hourAt } from '../map/weather.js';
 import { MAP_CENTRE_KEY } from './MapPage.js';
 import SunBearingPlanner from '../components/SunBearingPlanner.js';
@@ -211,6 +211,7 @@ export default function PlanShoot() {
   const [buildingsErr, setBuildingsErr] = useState('');
   const [weather, setWeather] = useState<PlanWeatherResponse | null | 'loading'>('loading');
   const [weatherErr, setWeatherErr] = useState('');
+  const [marine, setMarine] = useState<MarineData | null | 'loading'>('loading');
   const [passes, setPasses] = useState<{ configured: boolean; passes: TrainPass[] } | null>(null);
   const [rail, setRail] = useState<GeoJSON.FeatureCollection | null>(null);
   const [planes, setPlanes] = useState<{ p: Plane; km: number }[] | null | 'error'>(null);
@@ -230,6 +231,13 @@ export default function PlanShoot() {
     let live = true;
     setWeather('loading'); setWeatherErr('');
     fetchWeather(plan.lat, plan.lng, 16).then((w) => live && setWeather(w)).catch((err) => { if (live) { setWeather(null); setWeatherErr((err as Error).message); } });
+    return () => { live = false; };
+  }, [plan?.id]);
+  useEffect(() => {
+    if (!plan) return;
+    let live = true;
+    setMarine('loading');
+    fetchMarine(plan.lat, plan.lng).then((m) => live && setMarine(m)).catch(() => live && setMarine(null));
     return () => { live = false; };
   }, [plan?.id]);
   const rangeEnd = addDays(fromDay, days);
@@ -308,6 +316,11 @@ export default function PlanShoot() {
     }
     return map;
   }, [hourly, dayList]);
+
+  const marineLine = useMemo(() => {
+    if (!marine || marine === 'loading') return null;
+    return formatMarineDay(marine, focusDay, focus);
+  }, [marine, focusDay, focus]);
 
   const [sunriseBurn, setSunriseBurn] = useState<{ score: number; label: string } | null>(null);
   const [sunsetBurn, setSunsetBurn] = useState<{ score: number; label: string } | null>(null);
@@ -552,6 +565,7 @@ export default function PlanShoot() {
             <h3>Weather</h3>
             {hourly ? <><WeatherStrip hourly={hourly} day={focusDay} /><p className="hint">Shading = cloud cover · blue bar = rain chance · number = wind km/h</p></>
               : <p className="hint">{weather === 'loading' ? 'Loading forecast…' : 'Weather unavailable.'}</p>}
+            {marineLine && <p className="hint plan__marine">{marineLine}</p>}
             {dayPasses.length > 0 && (
               <>
                 <h3>Trains that day</h3>
