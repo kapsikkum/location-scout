@@ -2,6 +2,7 @@
 import { GeoJSONSource, Map as MlMap, type RasterTileSource, type LightSpecification } from 'maplibre-gl';
 import type { FireIncident, Place, Spot, TrafficCamera } from '../api.js';
 import { cameraBearing, ICON, thumbIconId } from './spotGlance.js';
+import { RAIL_COLOR } from './legend.js';
 import { destination, wedge } from './geo.js';
 import { buildingShadows, MIN_SHADOW_ALT, type Footprint } from './shadows.js';
 import type { ShadowJob } from './shadows.worker.js';
@@ -170,7 +171,7 @@ export function initFeedLayers(map: MlMap) {
   map.addLayer({
     id: 'rail-lines', type: 'line', source: 'rail', filter: ['==', ['geometry-type'], 'LineString'], layout: { visibility: 'none' },
     paint: {
-      'line-color': ['match', ['get', 'usage'], 'main', '#4cc3ff', 'branch', '#7fd8a0', ['match', ['get', 'service'], 'siding', '#c98a3a', 'yard', '#c98a3a', '#8a93a6']],
+      'line-color': ['match', ['get', 'usage'], 'main', RAIL_COLOR, 'branch', '#7fd8a0', ['match', ['get', 'service'], 'siding', '#c98a3a', 'yard', '#c98a3a', '#8a93a6']],
       'line-width': ['match', ['get', 'usage'], 'main', 2.5, 1.5],
     },
   });

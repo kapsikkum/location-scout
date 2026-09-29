@@ -26,6 +26,9 @@ export interface Category {
   match: (l: LegendLayer) => boolean;
 }
 
+/** Rail's colour wherever it's drawn: the highlighted base-map railways, the rail overlay's main lines, the legend. */
+export const RAIL_COLOR = '#f5a623';
+
 const sl = (l: LegendLayer) => l['source-layer'];
 const f = (l: LegendLayer) => JSON.stringify(l.filter ?? null);
 const isRail = (l: LegendLayer) => /\brail\b|"transit"|_rail/.test(`${l.id} ${f(l)}`);
@@ -53,7 +56,7 @@ export const CATEGORIES: Category[] = [
   { key: 'imagery', label: 'Satellite', group: 'Overlays', swatch: 'fill', color: '#3b5a3a', defaultOn: false, match: ids('imagery') },
   { key: 'night-lights', label: 'Night lights', group: 'Overlays', swatch: 'fill', color: '#ffd23f', defaultOn: false, match: ids('night-lights') },
   { key: 'weather', label: 'Weather', group: 'Overlays', swatch: 'fill', color: '#3aa0ff', defaultOn: false, match: ids('radar') },
-  { key: 'rail', label: 'Rail', group: 'Overlays', swatch: 'line', color: '#4cc3ff', defaultOn: false, match: ids('rail-lines', 'rail-industrial') },
+  { key: 'rail', label: 'Rail', group: 'Overlays', swatch: 'line', color: RAIL_COLOR, defaultOn: false, match: ids('rail-lines', 'rail-industrial') },
   { key: 'trains', label: 'Trains', group: 'Overlays', swatch: 'ring', color: '#22c55e', defaultOn: false, match: ids('trains') },
   { key: 'planes', label: 'Planes', group: 'Overlays', swatch: 'glyph', glyph: '✈', color: '#dfe7ff', defaultOn: false, match: ids('planes', 'planes-proj', 'planes-ghost', 'planes-shadow', 'planes-label', 'planes-3d') },
   { key: 'cameras', label: 'Cameras', group: 'Overlays', swatch: 'camera', color: '#38bdf8', defaultOn: false, match: ids('camera-cones', 'cameras') },
