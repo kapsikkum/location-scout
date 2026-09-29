@@ -40,7 +40,7 @@ Then open http://localhost:3003. Set `ADMIN_PASSWORD` before first boot to skip 
 | `INSTANCE_MODE` | `private` | `private`: every route needs a login. `public`: anonymous visitors see public spots. |
 | `ADMIN_PASSWORD` | — | Seeds user `admin` on first boot if no user exists. |
 | `TRUST_PROXY` | — | Behind a reverse proxy: hops to trust `X-Forwarded-For` from. |
-| `TFNSW_API_KEY` | — | TfNSW Open Data key, for passenger trains. |
+| `TFNSW_API_KEY` | — | TfNSW Open Data key, for passenger trains and live traffic cameras. |
 | `EVENT_SCOUT_URL` | — | event-scout base URL, for nearby events and crowds. From a container, use a shared Docker network and its service name, or `http://host.docker.internal:<port>`. |
 | `ADSB_URL` | `https://api.adsb.lol` | Planes feed; airplanes.live also works. |
 | `OVERPASS_URL` | — | OpenStreetMap Overpass server to try first (rail, suggestions); public mirrors are tried after it. |

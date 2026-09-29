@@ -182,6 +182,20 @@ export interface TrainPosition {
 export interface TrainPass { tripId: string; routeId: string; route: string; headsign: string; at: string }
 export interface TrainsStatus { configured: boolean; lastImport: string | null; tripCount: number }
 
+export interface TrafficCamera {
+  id: string;
+  title: string;
+  view: string;
+  direction: string;
+  region: string;
+  imageUrl: string;
+  point: [number, number];
+}
+export interface CamerasResponse {
+  configured: boolean;
+  cameras: TrafficCamera[];
+}
+
 export interface ScoutEvent {
   group: string; title: string; description: string; startTime: string; endTime: string; venueName: string;
   address: string; locality: string; lat: number; lng: number; imageUrl: string | null; category: string; goodDuring: boolean;
@@ -390,6 +404,8 @@ export const api = {
   trainPassesAt: (lat: number, lng: number, hours = 6) =>
     fetch(`/api/trains/passes?lat=${lat}&lng=${lng}&hours=${hours}`).then((r) => json<{ configured: boolean; passes: TrainPass[] }>(r)),
   spotTrains: (spotId: string, hours = 6) => fetch(`/api/spots/${spotId}/trains?hours=${hours}`).then((r) => json<{ configured: boolean; passes: TrainPass[] }>(r)),
+  // --- traffic cameras (TfNSW) ---
+  cameras: () => fetch('/api/cameras').then((r) => json<CamerasResponse>(r)),
 
   // --- Event Scout ---
   spotNearby: (spotId: string) => fetch(`/api/spots/${spotId}/nearby`).then((r) => json<NearbyResult>(r)),

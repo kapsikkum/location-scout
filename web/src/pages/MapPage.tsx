@@ -3,12 +3,12 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { GeoJSONSource, LngLatBounds, Map as MlMap, MapMouseEvent, Marker, NavigationControl, Popup, ScaleControl, setWorkerUrl } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
-import { api, Candidate, FireIncident, Place, Plane, type PlaneInfo, Spot, TrainPosition, User, type WeatherForecast } from '../api.js';
+import { api, Candidate, FireIncident, Place, Plane, type PlaneInfo, Spot, type TrafficCamera, TrainPosition, User, type WeatherForecast } from '../api.js';
 import { hourAt, pickRadarFrame, RAINVIEWER_INDEX, radarTileUrl, weatherIcon, type RadarIndex } from '../map/weather.js';
 import {
   CLICKABLE, initFeedLayers, initLayers, PLANE_LAYERS, setImagery, setLayerVisible, setTerrain3d, STYLE_URL, updateCandidates, updateDraft,
   updateMood, updatePlacesAndSpots, updatePlanes, updateRail, updateRays, setNearbyHighlight, updateShadows, updateTrains, updateWedges,
-  TRAIN_LAYERS, setTrains3d, updatePlanePositions, hiddenLayers, setRadarFrame, FIRE_LAYERS, updateFires,
+  TRAIN_LAYERS, setTrains3d, updatePlanePositions, hiddenLayers, setRadarFrame, FIRE_LAYERS, updateFires, updateCameras,
 } from '../map/layers.js';
 import { due, MotionTracker, planePredict, trainPredict } from '../map/motion.js';
 import { carriageCount } from '../map/trains3d.js';
@@ -64,7 +64,7 @@ const newSpot = (lat: number, lng: number, placeId: string | null = null): SpotD
 });
 
 /** Legend keys whose visibility is applied by their own effect below. */
-const FEED_KEYS = ['imagery', 'planes', 'rail', 'trains', 'candidates', 'weather', 'fires'];
+const FEED_KEYS = ['imagery', 'planes', 'rail', 'trains', 'candidates', 'weather', 'fires', 'cameras'];
 const RADAR_POLL_MS = 10 * 60_000;
 
 export default function MapPage({ user }: { user: User | null }) {
@@ -106,7 +106,7 @@ export default function MapPage({ user }: { user: User | null }) {
   const [vis, setVis] = useState<Visibility>(loadVisibility);
   useEffect(() => saveVisibility(vis), [vis]);
   const toggle = (key: string, on = !vis[key]) => setVis((v) => ({ ...v, [key]: on }));
-  const { planes: planesOn, rail: railOn, trains: trainsOn, candidates: candidatesOn, imagery, weather: weatherOn, fires: firesOn } = vis;
+  const { planes: planesOn, rail: railOn, trains: trainsOn, candidates: candidatesOn, imagery, weather: weatherOn, fires: firesOn, cameras: camerasOn } = vis;
   const railEffectiveOn = effectiveRailOn(railOn, trainsOn);
   const baseRailPaint = useRef<BaseRailPaintSnapshot[] | null>(null);
   const [rail, setRail] = useState<GeoJSON.FeatureCollection | null>(null);
@@ -114,6 +114,7 @@ export default function MapPage({ user }: { user: User | null }) {
   const [fires, setFires] = useState<FireIncident[]>([]);
   const [planeData, setPlaneData] = useState<Plane[]>([]);
   const [trainData, setTrainData] = useState<TrainPosition[]>([]);
+  const [cameraData, setCameraData] = useState<TrafficCamera[]>([]);
 
   // Smooth movement between polls, and follow mode (camera on one vehicle).
   const planeMotion = useRef(new MotionTracker());
@@ -275,6 +276,34 @@ export default function MapPage({ user }: { user: User | null }) {
     setLayerVisible(map, FIRE_LAYERS, !!firesOn);
     if (firesOn) updateFires(map, fires);
   }, [map, firesOn, fires]);
+
+  // NSW Live Traffic cameras: fetched when the layer is on and polled every 10 min.
+  useEffect(() => {
+    if (!map) return;
+    setLayerVisible(map, ['cameras'], !!camerasOn);
+    if (!camerasOn) return;
+    let stop = false;
+    const load = () => {
+      api.cameras().then((res) => {
+        if (stop) return;
+        if (res.cameras) {
+          setCameraData(res.cameras);
+          updateCameras(map, res.cameras);
+        }
+      }).catch((err) => {
+        if (!stop) setError((err as Error).message);
+      });
+    };
+    load();
+    const id = setInterval(load, 10 * 60_000);
+    return () => { stop = true; clearInterval(id); };
+  }, [map, camerasOn]);
+
+  useEffect(() => {
+    if (map && camerasOn && cameraData.length > 0) {
+      updateCameras(map, cameraData);
+    }
+  }, [map, camerasOn, cameraData]);
 
   // Animation: move planes and trains between polls, at most every FRAME_MS, and only for shown layers.
   const trainById = useMemo(() => new Map(trainData.map((t) => [t.tripId, t])), [trainData]);
@@ -556,6 +585,11 @@ export default function MapPage({ user }: { user: User | null }) {
     const hit = map.queryRenderedFeatures(e.point, { layers: CLICKABLE.filter((l) => map.getLayer(l)) })[0];
     if (!hit) return setSelected(null);
     const id = hit.properties?.id as string;
+    if (hit.layer.id === 'cameras') {
+      const coords = (hit.geometry as GeoJSON.Point).coordinates as [number, number];
+      showCameraPopup(map, coords, hit.properties ?? {});
+      return;
+    }
     if (FIRE_LAYERS.includes(hit.layer.id)) {
       showFirePopup(map, [lng, lat], hit.properties ?? {});
       return;
@@ -722,6 +756,7 @@ export default function MapPage({ user }: { user: User | null }) {
         <button className={`chip${trainsOn ? ' active' : ''}`} onClick={() => toggle('trains')} title="Live passenger train positions, refreshed every 20s (needs a TfNSW key)">🚆 Trains</button>
         <button className={`chip${weatherOn ? ' active' : ''}`} onClick={() => toggle('weather')} title="Rain radar (RainViewer, recent past only) and the forecast at the map centre for the map time">🌦 Weather</button>
         <button className={`chip${candidatesOn ? ' active' : ''}`} onClick={() => toggle('candidates')} title="OpenStreetMap viewpoints, ruins and other candidates">📍 Candidates</button>
+        <button className={`chip${camerasOn ? ' active' : ''}`} onClick={() => toggle('cameras')} title="NSW live traffic cameras (TfNSW)">📷 Cameras</button>
         {user && !editing && (
           <>
             <button className={`chip${mode === 'pick-spot' ? ' active' : ''}`} onClick={() => setMode(mode === 'pick-spot' ? 'browse' : 'pick-spot')}>+ Spot</button>
@@ -913,6 +948,27 @@ function showFirePopup(map: MlMap, at: [number, number], p: Record<string, any>)
   const html = `<strong>${title}</strong>${cat ? ` · <span>${cat}</span>` : ''}<br/>`
     + (status ? `<span>Status: ${status}${size}</span>` : '')
     + link;
+  openPopup(map, at, html);
+}
+
+function showCameraPopup(map: MlMap, at: [number, number], p: Record<string, any>) {
+  const id = String(p.id ?? '');
+  const title = escapeHtml(String(p.title || 'Traffic camera'));
+  const direction = p.direction ? escapeHtml(String(p.direction)) : '';
+  const view = p.view ? escapeHtml(String(p.view)) : '';
+  const rawUrl = String(p.imageUrl || '');
+  const t = Date.now();
+  const directUrl = rawUrl ? (rawUrl.includes('?') ? `${rawUrl}&t=${t}` : `${rawUrl}?t=${t}`) : '';
+  const proxyUrl = id ? `/api/cameras/${encodeURIComponent(id)}/image?t=${t}` : '';
+  const imgUrl = directUrl || proxyUrl;
+  const fallbackAttr = proxyUrl && directUrl ? ` onerror="if(this.src!=='${escapeHtml(proxyUrl)}'){this.src='${escapeHtml(proxyUrl)}';}"` : '';
+
+  const html = `<div class="camera-popup">`
+    + (imgUrl ? `<div style="margin-bottom:6px;"><img src="${escapeHtml(imgUrl)}"${fallbackAttr} alt="${title}" style="width:100%;max-width:320px;height:auto;border-radius:4px;display:block;background:#171a21;" loading="lazy" /></div>` : '')
+    + `<strong>${title}</strong>`
+    + (direction ? ` <span>(${direction})</span>` : '')
+    + (view && view !== title ? `<br/><span style="font-size:11px;color:#8a93a6;">${view}</span>` : '')
+    + `</div>`;
   openPopup(map, at, html);
 }
 

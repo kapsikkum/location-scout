@@ -23,6 +23,7 @@ import { fetchMarine } from './feeds/marine.js';
 import { fetchFires } from './feeds/rfs.js';
 import { fetchAurora } from './feeds/spaceWeather.js';
 import { fetchBuildings } from './sources/osm.js';
+import { fetchCameras } from './feeds/cameras.js';
 import {
   buildPointPassesResponse, combinedFeedData, combinedRealtime, emptyFeedData, nextPasses, parsePointPassRequest, predictTrainPositions, tripCount, TRAIN_FEEDS,
 } from './feeds/trains.js';
@@ -785,6 +786,48 @@ app.get('/api/spots/:id/trains', (req, res) => {
   const hours = Number(req.query.hours ?? 6);
   const passes = nextPasses(combinedFeedData(db), spot, hours, new Date());
   res.json({ configured: true, passes });
+});
+
+// --- traffic cameras (TfNSW) --------------------------------------------------
+
+app.get('/api/cameras', async (_req, res, next) => {
+  try {
+    const key = tfnswKey(db);
+    if (!key) return res.json({ configured: false, cameras: [] });
+    const cameras = await fetchCameras(key);
+    res.json({ configured: true, cameras });
+  } catch (err) {
+    const status = (err as any).status ?? 502;
+    res.status(status).json({ error: (err as Error).message });
+  }
+});
+
+app.get('/api/cameras/:id/image', async (req, res, next) => {
+  try {
+    const key = tfnswKey(db);
+    if (!key) return res.status(404).json({ error: 'Not configured' });
+    const cameras = await fetchCameras(key);
+    const camera = cameras.find((c) => c.id === req.params.id);
+    if (!camera || !camera.imageUrl) return res.status(404).json({ error: 'Camera not found' });
+    const url = new URL(camera.imageUrl);
+    if (url.protocol !== 'https:') return res.status(502).json({ error: 'Camera image is not https' });
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 10_000);
+    try {
+      // The key only goes to TfNSW's own API host, never to wherever the feed points images.
+      const headers: Record<string, string> = { 'User-Agent': 'location-scout/0.1 (local personal app)' };
+      if (url.hostname === 'api.transport.nsw.gov.au') headers.Authorization = `apikey ${key}`;
+      const imgRes = await fetch(url, { headers, signal: controller.signal });
+      if (!imgRes.ok) return res.status(502).json({ error: `Image fetch failed (${imgRes.status})` });
+      const contentType = imgRes.headers.get('content-type') ?? '';
+      if (!contentType.startsWith('image/')) return res.status(502).json({ error: 'Camera image is not an image' });
+      res.setHeader('Content-Type', contentType);
+      const buf = Buffer.from(await imgRes.arrayBuffer());
+      res.send(buf);
+    } finally {
+      clearTimeout(timer);
+    }
+  } catch (err) { next(err); }
 });
 
 // --- Event Scout: nearby events and busyness --------------------------------------

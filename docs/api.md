@@ -59,4 +59,6 @@ Same auth rules as above.
 | GET | `/api/fires` | NSW RFS major incidents (fires), cached 5 min. |
 | GET | `/api/aurora` | NOAA planetary K-index (now + next 24h max), cached 30 min. |
 | GET | `/api/marine?lat=&lng=` | Open-Meteo marine tides and swell for coastal spots, cached per 0.05° cell for 1 h. |
+| GET | `/api/cameras` | NSW live traffic cameras (TfNSW, needs `TFNSW_API_KEY`), cached 10 min. |
+| GET | `/api/cameras/:id/image` | Proxy live JPEG for a traffic camera. |
 

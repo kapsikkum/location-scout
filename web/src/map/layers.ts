@@ -1,6 +1,6 @@
 /** MapLibre sources and layers: base extras (imagery, DEM), light (mood, rays, shadows) and our places/spots. */
 import { GeoJSONSource, Map as MlMap, type RasterTileSource, type LightSpecification } from 'maplibre-gl';
-import type { FireIncident, Place, Spot } from '../api.js';
+import type { FireIncident, Place, Spot, TrafficCamera } from '../api.js';
 import { ICON, thumbIconId } from './spotGlance.js';
 import { destination, wedge } from './geo.js';
 import { buildingShadows, MIN_SHADOW_ALT, type Footprint } from './shadows.js';
@@ -261,6 +261,13 @@ export function initFeedLayers(map: MlMap) {
     layout: { visibility: 'none' },
     paint: { 'circle-radius': 6, 'circle-color': FIRE_COLOR, 'circle-stroke-color': '#0e1014', 'circle-stroke-width': 1.5 },
   });
+
+  // NSW Live Traffic cameras: points coloured bright sky-blue
+  map.addSource('cameras', { type: 'geojson', data: empty(), attribution: '© Transport for NSW' });
+  map.addLayer({
+    id: 'cameras', type: 'circle', source: 'cameras', layout: { visibility: 'none' },
+    paint: { 'circle-radius': 6, 'circle-color': '#38bdf8', 'circle-stroke-color': '#0e1014', 'circle-stroke-width': 1.5 },
+  });
 }
 
 /** Layers the user has switched off (legend/chips); code that toggles visibility itself must respect this. */
@@ -417,7 +424,33 @@ export function updateFires(map: MlMap, fires: FireIncident[]) {
   setData(map, 'fires', firesGeoJSON(fires));
 }
 
-export const CLICKABLE = ['spot-thumbs', 'place-spot-thumbs', 'spot-points', 'place-spots', 'clusters', 'place-points', 'place-fill', 'place-line', 'candidates', 'fires-pts', 'fires-polys-fill', 'fires-polys-line'];
+export function camerasGeoJSON(cameras: TrafficCamera[]): GeoJSON.FeatureCollection {
+  return {
+    type: 'FeatureCollection',
+    features: cameras.map((c) => ({
+      type: 'Feature',
+      id: c.id,
+      properties: {
+        id: c.id,
+        title: c.title,
+        view: c.view,
+        direction: c.direction,
+        region: c.region,
+        imageUrl: c.imageUrl,
+      },
+      geometry: {
+        type: 'Point',
+        coordinates: c.point,
+      },
+    })),
+  };
+}
+
+export function updateCameras(map: MlMap, cameras: TrafficCamera[]) {
+  setData(map, 'cameras', camerasGeoJSON(cameras));
+}
+
+export const CLICKABLE = ['spot-thumbs', 'place-spot-thumbs', 'spot-points', 'place-spots', 'clusters', 'place-points', 'place-fill', 'place-line', 'candidates', 'fires-pts', 'fires-polys-fill', 'fires-polys-line', 'cameras'];
 
 export function setImagery(map: MlMap, on: boolean) {
   map.setLayoutProperty('imagery', 'visibility', on ? 'visible' : 'none');
