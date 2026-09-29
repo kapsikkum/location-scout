@@ -28,6 +28,17 @@ import SpotEditor, { SpotDraft } from '../components/SpotEditor.js';
 import PlaceEditor, { draftToPlace, PlaceDraft, placeToDraft } from '../components/PlaceEditor.js';
 import { emptyGoodTimes } from '../components/GoodTimesEditor.js';
 import DayStrip from '../components/DayStrip.js';
+import SunBearingPlanner from '../components/SunBearingPlanner.js';
+import {
+  Coordinate,
+  defaultSunAnchorAdapter,
+  handleSunAnchorPlacementClick,
+  resolveDisplayOrigin,
+  resolveSunPlannerBearing,
+  shouldShowSunPlanner,
+  SunAnchorController,
+  updateSelectedBearingProjection,
+} from '../map/sunAnchor.js';
 
 type Selection = { type: 'spot' | 'place' | 'candidate'; id: string } | null;
 type Editing = { type: 'spot'; draft: SpotDraft } | { type: 'place'; draft: PlaceDraft } | null;
@@ -63,13 +74,31 @@ export default function MapPage({ user }: { user: User | null }) {
   const [error, setError] = useState('');
   const [selected, setSelected] = useState<Selection>(null);
   const [editing, setEditing] = useState<Editing>(null);
-  const [mode, setMode] = useState<'browse' | 'pick-spot' | 'draw'>('browse');
+  const [mode, setMode] = useState<'browse' | 'pick-spot' | 'draw' | 'anchor'>('browse');
+  const [sunAnchor, setSunAnchor] = useState<Coordinate | null>(null);
+  const [sunAnchorBearing, setSunAnchorBearing] = useState<number | null>(null);
   const [terrain, setTerrainOn] = useState(false);
   const [goodOnly, setGoodOnly] = useState(false);
   const [centre, setCentre] = useState({ lat: -33.419, lng: 149.577 });
   const [view, setView] = useState(0); // bumps on moveend, for zoom-scaled geometry and shadows
   const [params, setParams] = useSearchParams();
-  const { time } = useMapTime();
+  const { time, setTime } = useMapTime();
+
+  const sunAnchorController = useRef<SunAnchorController | null>(null);
+  if (!sunAnchorController.current) {
+    sunAnchorController.current = new SunAnchorController(defaultSunAnchorAdapter);
+  }
+
+  useEffect(() => {
+    sunAnchorController.current?.sync(map, sunAnchor, (coord) => setSunAnchor(coord), undefined, sunAnchorBearing, setSunAnchorBearing);
+  }, [map, sunAnchor?.lat, sunAnchor?.lng, sunAnchorBearing]);
+
+  useEffect(() => {
+    return () => {
+      sunAnchorController.current?.destroy();
+      sunAnchorController.current = null;
+    };
+  }, []);
 
   // Phase 3: live feeds, each behind its own toggle so nothing polls unasked.
   // Layer visibility: one source of truth for the legend and the chips.
@@ -372,12 +401,21 @@ export default function MapPage({ user }: { user: User | null }) {
     if (map) updateWedges(map, shownSpots, (s) => goodNow(s, time), highlight);
   }, [view]);
 
-  const origin = spotDraft ?? selectedSpot ?? centre;
+  const displayOrigin = resolveDisplayOrigin({
+    sunAnchor,
+    spotDraft,
+    selectedSpot,
+    viewportCentre: centre,
+  });
   useEffect(() => {
     if (!map) return;
-    updateMood(map, sunPos(time, origin.lat, origin.lng));
-    updateRays(map, origin, time);
-  }, [map, time, origin.lat, origin.lng, view]);
+    updateMood(map, sunPos(time, centre.lat, centre.lng));
+    updateRays(map, displayOrigin, time);
+  }, [map, time, centre.lat, centre.lng, displayOrigin.lat, displayOrigin.lng, view]);
+
+  useEffect(() => {
+    if (map) updateSelectedBearingProjection(map, sunAnchor, sunAnchorBearing);
+  }, [map, sunAnchor?.lat, sunAnchor?.lng, sunAnchorBearing, view]);
 
   // Shadows: throttled, on moveend and on time change.
   const shadowTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -440,8 +478,16 @@ export default function MapPage({ user }: { user: User | null }) {
   onClick.current = (e) => {
     if (!map) return;
     const { lat, lng } = e.lngLat;
+    const placement = handleSunAnchorPlacementClick(mode, { lat, lng });
+    if (placement.consumed) {
+      setSunAnchor(placement.newAnchor!);
+      setSunAnchorBearing(0);
+      setMode(placement.nextMode ?? 'browse');
+      return;
+    }
     if (mode === 'pick-spot') {
       setMode('browse');
+
       setSelected(null);
       setEditing({ type: 'spot', draft: newSpot(lat, lng) });
       focus(lng, lat);
@@ -575,8 +621,9 @@ export default function MapPage({ user }: { user: User | null }) {
     setSelected({ type: 'spot', id: spot.id });
   }
 
-  const panelOpen = !!editing || !!selectedSpot || !!selectedPlace || !!selectedCandidate;
+  const panelOpen = !!editing || !!selectedSpot || !!selectedPlace || !!selectedCandidate || shouldShowSunPlanner(sunAnchor, null);
   const placeSpots = selectedPlace ? spots.filter((s) => s.placeId === selectedPlace.id) : [];
+  const selectedSunBearing = selectedSpot ? resolveSunPlannerBearing(selectedSpot, sunAnchor, sunAnchorBearing) : null;
 
   return (
     <div className={`mapshell${panelOpen ? ' mapshell--panel' : ''}`}>
@@ -591,7 +638,15 @@ export default function MapPage({ user }: { user: User | null }) {
         </div>
       )}
       {followNote && !follow && <div className="maptoast">{followNote}</div>}
-      {mode !== 'browse' && <div className="maptoast">{mode === 'pick-spot' ? 'Click the map to place the spot' : 'Click the map to add outline points'}</div>}
+      {mode !== 'browse' && (
+        <div className="maptoast">
+          {mode === 'pick-spot'
+            ? 'Click the map to place the spot'
+            : mode === 'anchor'
+            ? 'Click the map to place the sun anchor'
+            : 'Click the map to add outline points'}
+        </div>
+      )}
 
       <Legend map={map} vis={vis} onToggle={toggle} />
       <NearbyList planes={planesOn ? planeData : null} trains={trainsOn ? trainData : null} centre={centre}
@@ -627,6 +682,27 @@ export default function MapPage({ user }: { user: User | null }) {
           </>
         )}
       </div>
+      <div className="sunanchor-controls" role="group" aria-label="Sun anchor controls">
+        <button
+          type="button"
+          className={mode === 'anchor' ? 'active' : ''}
+          onClick={() => setMode((m) => (m === 'anchor' ? 'browse' : 'anchor'))}
+        >
+          Place anchor
+        </button>
+        <button
+          type="button"
+          disabled={!sunAnchor}
+          onClick={() => {
+            setSunAnchor(null);
+            setSunAnchorBearing(null);
+            setMode((m) => (m === 'anchor' ? 'browse' : m));
+          }}
+        >
+          Clear
+        </button>
+        <span>{sunAnchor ? `${sunAnchor.lat.toFixed(5)}, ${sunAnchor.lng.toFixed(5)}` : 'No anchor set'}</span>
+      </div>
 
       {panelOpen && (
         <aside className="panel">
@@ -640,13 +716,31 @@ export default function MapPage({ user }: { user: User | null }) {
               onChange={(draft) => setEditing({ type: 'place', draft })} onSave={() => savePlace(editing.draft)} onCancel={cancelEdit}
               onDelete={editing.draft.id ? () => void deletePlace(editing.draft.id!) : undefined} />
           )}
+          {!editing && sunAnchor && !selectedSpot && (
+            <SunBearingPlanner
+              lat={sunAnchor.lat}
+              lng={sunAnchor.lng}
+              defaultBearingDeg={sunAnchorBearing}
+              label="Sun anchor plan"
+              onApplyTime={setTime}
+            />
+          )}
           {!editing && selectedSpot && (
-            <SpotPanel spot={selectedSpot} place={places.find((p) => p.id === selectedSpot.placeId)} time={time}
-              canEdit={canEdit(selectedSpot.ownerId)}
-              onEdit={() => { setEditing({ type: 'spot', draft: { ...selectedSpot } }); focus(selectedSpot.lng, selectedSpot.lat); }}
-              onDelete={() => void deleteSpot(selectedSpot)}
-              onMove={async (lat, lng) => { await api.updateSpot(selectedSpot.id, { lat, lng }); await reload(); focus(lng, lat); }}
-              onCreateSpotAt={(lat, lng) => createSpotAt(lat, lng, selectedSpot.placeId)} />
+            <>
+              <SpotPanel spot={selectedSpot} place={places.find((p) => p.id === selectedSpot.placeId)} time={time}
+                canEdit={canEdit(selectedSpot.ownerId)}
+                onEdit={() => { setEditing({ type: 'spot', draft: { ...selectedSpot } }); focus(selectedSpot.lng, selectedSpot.lat); }}
+                onDelete={() => void deleteSpot(selectedSpot)}
+                onMove={async (lat, lng) => { await api.updateSpot(selectedSpot.id, { lat, lng }); await reload(); focus(lng, lat); }}
+                onCreateSpotAt={(lat, lng) => createSpotAt(lat, lng, selectedSpot.placeId)} />
+              <SunBearingPlanner
+                lat={selectedSpot.lat}
+                lng={selectedSpot.lng}
+                defaultBearingDeg={selectedSunBearing}
+                label={sunAnchor ? 'Sun anchor plan' : 'Bearing plan'}
+                onApplyTime={setTime}
+              />
+            </>
           )}
           {!editing && selectedPlace && (
             <>
@@ -697,10 +791,11 @@ export default function MapPage({ user }: { user: User | null }) {
           {radarFrame?.nowcast && <span className="wxpill__muted">· radar nowcast</span>}
         </div>
       )}
-      <TimeBar lat={origin.lat} lng={origin.lng} />
+      <TimeBar lat={displayOrigin.lat} lng={displayOrigin.lng} />
     </div>
   );
 }
+
 
 function escapeHtml(s: string): string {
   return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
