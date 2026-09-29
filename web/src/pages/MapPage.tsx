@@ -956,7 +956,7 @@ function showFirePopup(map: MlMap, at: [number, number], p: Record<string, any>)
 function homeControl() {
   const el = document.createElement('div');
   el.className = 'maplibregl-ctrl maplibregl-ctrl-group';
-  el.innerHTML = `<button type="button" title="Home" aria-label="Fly to home"><svg viewBox="0 0 24 24" width="18" height="18" style="margin:auto;display:block" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M3 11 12 4l9 7"/><path d="M5 10v10h5v-6h4v6h5V10"/></svg></button>`;
+  el.innerHTML = `<button type="button" title="Home" aria-label="Fly to home"><svg viewBox="0 0 24 24" width="18" height="18" style="margin:auto;display:block" fill="none" stroke="#333" stroke-width="2" stroke-linejoin="round"><path d="M3 11 12 4l9 7"/><path d="M5 10v10h5v-6h4v6h5V10"/></svg></button>`;
   return {
     onAdd(map: MlMap) {
       el.querySelector('button')!.onclick = () => {
