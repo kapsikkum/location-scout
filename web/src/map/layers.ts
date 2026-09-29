@@ -3,6 +3,7 @@ import { GeoJSONSource, Map as MlMap, type RasterTileSource, type LightSpecifica
 import type { FireIncident, Place, Spot, TrafficCamera } from '../api.js';
 import { cameraBearing, ICON, thumbIconId } from './spotGlance.js';
 import { RAIL_COLOR } from './legend.js';
+import { useOvertureBuildings } from './overture.js';
 import { destination, wedge } from './geo.js';
 import { buildingShadows, MIN_SHADOW_ALT, type Footprint } from './shadows.js';
 import type { ShadowJob } from './shadows.worker.js';
@@ -44,6 +45,7 @@ export const DEM_SOURCE = { type: 'raster-dem' as const, tiles: [TERRARIUM], til
   attribution: 'Terrain: <a href="https://registry.opendata.aws/terrain-tiles/">AWS Terrain Tiles</a>' };
 
 export function initLayers(map: MlMap) {
+  useOvertureBuildings(map);
   const layers = styleLayers(map);
   const firstSymbol = layers.find((l) => l.type === 'symbol')?.id;
   const firstRoad = layers.find((l) => l.type === 'line' && 'source-layer' in l && l['source-layer'] === 'transportation')?.id ?? firstSymbol;
