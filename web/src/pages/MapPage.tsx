@@ -512,7 +512,9 @@ export default function MapPage({ user }: { user: User | null }) {
     if (!map) return;
     const groups = groupLayers(map.getStyle().layers ?? []);
     for (const c of CATEGORIES) if (!FEED_KEYS.includes(c.key)) setLayerVisible(map, groups[c.key], vis[c.key]);
-  }, [map, vis]);
+    // Extruded buildings only in 3D; the flat footprints (which building shadows also read) stay either way.
+    setLayerVisible(map, groups.buildings.filter((id) => map.getLayer(id)?.type === 'fill-extrusion'), vis.buildings && terrain);
+  }, [map, vis, terrain]);
   useEffect(() => { if (map) setTerrain3d(map, terrain); }, [map, terrain]);
 
   const placeDraft = editing?.type === 'place' ? editing.draft : null;
