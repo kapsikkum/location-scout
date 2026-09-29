@@ -357,6 +357,16 @@ function parseStaticZip(buf: Buffer) {
   };
 }
 
+/**
+ * Rail rather than road: TfNSW's nswtrains feed also carries NSW TrainLink coaches (route ids "4T.C.<n>", GTFS route_type
+ * 204 or other non-rail types). Trains are route_type 2 or 100-199; an unknown type falls back to the id.
+ */
+export function isTrainRoute(routeId: string | null | undefined, routeType?: string | number | null): boolean {
+  const t = routeType == null || routeType === '' ? NaN : Number(routeType);
+  if (Number.isFinite(t)) return t === 2 || (t >= 100 && t < 200);
+  return !/^[^.]+\.C\./.test(routeId ?? '');
+}
+
 export interface TrainArea { lat: number; lng: number; radiusKm: number }
 
 /** Fetch, filter to trips touching `areas`, and store this feed's static GTFS data, replacing what was there. */
@@ -391,7 +401,8 @@ export async function importStaticGtfs(db: Db, feedName: TrainFeedName, apiKey: 
       return s ? inArea(s.lat, s.lng) : false;
     });
   };
-  const keptTrips = parsed.trips.filter(touchesArea);
+  const routeTypeById = new Map(parsed.routes.map((r) => [r.route_id, r.route_type]));
+  const keptTrips = parsed.trips.filter((t) => isTrainRoute(t.route_id, routeTypeById.get(t.route_id)) && touchesArea(t));
   const keptTripIds = new Set(keptTrips.map((t) => t.trip_id));
   const keptShapeIds = new Set(keptTrips.map((t) => t.shape_id).filter(Boolean));
   const keptServiceIds = new Set(keptTrips.map((t) => t.service_id));
@@ -495,7 +506,7 @@ async function fetchRealtimeFeed(feedName: TrainFeedName, apiKey: string): Promi
   }
   for (const e of vp?.entity ?? []) {
     const tripId = e.vehicle?.trip?.tripId;
-    if (!tripId) continue;
+    if (!tripId || !isTrainRoute(e.vehicle?.trip?.routeId)) { if (tripId) byTrip.delete(tripId); continue; }
     const existing = byTrip.get(tripId) ?? { tripId, delaySec: 0, feed: feedName };
     byTrip.set(tripId, { ...existing, vehicleLat: e.vehicle?.position?.latitude, vehicleLng: e.vehicle?.position?.longitude, ...vehicleExtras(e.vehicle) });
   }
