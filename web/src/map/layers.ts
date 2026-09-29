@@ -13,10 +13,11 @@ import { Trains3dLayer, trainsNo3d, type Train3d } from './trains3dLayer.js';
 import { registerTerrainShadowProtocol, setBuildingShadows, setTerrainShadowSun, setTerrainShadowTerrain, SHADOW_RASTER_MAX_Z } from './terrainShadowSource.js';
 import { RADAR_MAX_NATIVE_Z } from './weather.js';
 import { moodAt, moonPos, sunPos, sunriseSunset } from './sun.js';
+import { SELECTED_BEARING_PROJECTION_SOURCE } from './sunAnchor.js';
 
 export const STYLE_URL = 'https://tiles.openfreemap.org/styles/liberty';
-const ESRI = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}';
-const TERRARIUM = 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png';
+export const ESRI = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}';
+export const TERRARIUM = 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png';
 const FONT = ['Noto Sans Regular'];
 
 export const CHILD_SPOT_ZOOM = 13;
@@ -37,6 +38,9 @@ export function buildingLayerIds(map: MlMap): string[] {
   return styleLayers(map).filter((l) => 'source-layer' in l && l['source-layer'] === 'building').map((l) => l.id);
 }
 
+export const DEM_SOURCE = { type: 'raster-dem' as const, tiles: [TERRARIUM], tileSize: 256, maxzoom: 15, encoding: 'terrarium' as const,
+  attribution: 'Terrain: <a href="https://registry.opendata.aws/terrain-tiles/">AWS Terrain Tiles</a>' };
+
 export function initLayers(map: MlMap) {
   const layers = styleLayers(map);
   const firstSymbol = layers.find((l) => l.type === 'symbol')?.id;
@@ -46,10 +50,8 @@ export function initLayers(map: MlMap) {
   map.addSource('imagery', { type: 'raster', tiles: [ESRI], tileSize: 256, maxzoom: 17, attribution: 'Imagery © Esri' });
   map.addLayer({ id: 'imagery', type: 'raster', source: 'imagery', layout: { visibility: 'none' } }, firstRoad);
 
-  const dem = { type: 'raster-dem' as const, tiles: [TERRARIUM], tileSize: 256, maxzoom: 15, encoding: 'terrarium' as const,
-    attribution: 'Terrain: <a href="https://registry.opendata.aws/terrain-tiles/">AWS Terrain Tiles</a>' };
-  map.addSource('dem', dem);
-  map.addSource('terrain', dem); // a second source for 3D terrain, as MapLibre recommends
+  map.addSource('dem', DEM_SOURCE);
+  map.addSource('terrain', DEM_SOURCE); // a second source for 3D terrain, as MapLibre recommends
   map.addLayer({
     id: 'hillshade', type: 'hillshade', source: 'dem',
     paint: { 'hillshade-illumination-anchor': 'map', 'hillshade-method': 'combined', 'hillshade-exaggeration': 0.5 },
@@ -87,6 +89,14 @@ export function initLayers(map: MlMap) {
       'line-width': ['match', ['get', 'kind'], 'sun', 4, 'moon', 3, 2],
       'line-opacity': ['case', ['get', 'up'], 0.95, 0.4],
       'line-dasharray': ['match', ['get', 'kind'], 'sunrise', ['literal', [2, 2]], 'sunset', ['literal', [2, 2]], ['literal', [1, 0]]],
+    } });
+
+  map.addSource(SELECTED_BEARING_PROJECTION_SOURCE, { type: 'geojson', data: empty() });
+  map.addLayer({ id: SELECTED_BEARING_PROJECTION_SOURCE, type: 'line', source: SELECTED_BEARING_PROJECTION_SOURCE, layout: { 'line-cap': 'round' },
+    paint: {
+      'line-color': '#ff2bd6',
+      'line-width': ['interpolate', ['linear'], ['zoom'], 8, 2.5, 16, 4.5],
+      'line-opacity': 0.95,
     } });
 
   map.addSource('draft', { type: 'geojson', data: empty() });

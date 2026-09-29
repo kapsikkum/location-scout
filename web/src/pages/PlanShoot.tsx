@@ -5,12 +5,14 @@ import { haversineKm } from '../map/geo.js';
 import { Alignment, alignments, moonPhase, nextGoodWindow, PHASE_LABEL, Phase, sunriseSunset } from '../map/sun.js';
 import { hhmm, hhmm24, ymd } from '../time.js';
 import DayStrip from '../components/DayStrip.js';
+import ViewPreview from '../components/ViewPreview.js';
 import { bestWindows, buildingShadeAt, lightTimeline, WINDOW_LABEL, type ShadeTest, type Step, type WindowKind } from '../map/shootPlan.js';
 import { terrainShadeForPoint } from '../map/demPoint.js';
 import type { Footprint } from '../map/shadows.js';
 import { CRITERIA, DEFAULT_CRITERIA, parseCriteria, railDistanceKm, recommend, weatherAt, type Criterion, type Recommendation, type WeatherHour, type WeatherResponse } from '../map/recommend.js';
 import { fetchWeather } from './planWeather.js';
 import { MAP_CENTRE_KEY } from './MapPage.js';
+import SunBearingPlanner from '../components/SunBearingPlanner.js';
 
 const ALIGN_BONUS_H = 12;
 const CROWD_LOOKUP_CAP = 50; // ponytail: one Event Scout lookup per spot; fine at personal-app scale, cap avoids hammering it on a big radius
@@ -20,10 +22,9 @@ const OVERHEAD_KM = 5;
 const TRAIN_WINDOW_MIN = 10;
 const LIGHT_COLOR = { sun: '#f5c542', shade: '#4a5068', night: '#05070f' } as const;
 const WINDOW_COLOR: Record<WindowKind, string> = { 'golden-sun': '#f5a623', 'even-shade': '#8fa3c8' };
-type Tab = 'rec' | 'day' | 'weather' | 'trains' | 'spots';
+type Tab = 'rec' | 'day' | 'trains';
 const TABS: { key: Tab; label: string }[] = [
-  { key: 'rec', label: 'Recommended' }, { key: 'day', label: 'Day timeline' }, { key: 'weather', label: 'Weather' },
-  { key: 'trains', label: 'Trains & planes' }, { key: 'spots', label: 'Spots' },
+  { key: 'rec', label: 'Best times' }, { key: 'day', label: 'The day' }, { key: 'trains', label: 'Trains & planes' },
 ];
 
 interface Row { spot: Spot; km: number; good: { start: Date; end: Date; phase: Phase } | null; align: Alignment | null; score: number }
@@ -99,6 +100,20 @@ function LightStrip({ steps, day }: { steps: Step[]; day: Date }) {
   );
 }
 
+function dayWeatherSummary(hourly: WeatherHour[] | null, day: Date): string | null {
+  if (!hourly) return null;
+  const hours = Array.from({ length: 24 }, (_, h) => new Date(day.getFullYear(), day.getMonth(), day.getDate(), h));
+  const ws = hours.map((t) => weatherAt(hourly, t)).filter(Boolean) as WeatherHour[];
+  if (!ws.length) return null;
+  const avgCloud = Math.round(ws.reduce((acc, w) => acc + w.cloudPct, 0) / ws.length);
+  const maxRain = Math.round(Math.max(...ws.map((w) => w.precipProbPct)));
+  const temps = ws.map((w) => w.tempC);
+  const minTemp = Math.round(Math.min(...temps));
+  const maxTemp = Math.round(Math.max(...temps));
+  const tempStr = minTemp === maxTemp ? `${maxTemp}°C` : `${minTemp}–${maxTemp}°C`;
+  return `${avgCloud}% cloud · ${maxRain}% rain · ${tempStr}`;
+}
+
 export default function PlanShoot() {
   const [params, setParams] = useSearchParams();
   const set = (patch: Record<string, string | null>) => setParams((p) => {
@@ -110,7 +125,8 @@ export default function PlanShoot() {
   const today = startOfDay(new Date());
   const fromDay = parseYmd(params.get('from')) ?? today;
   const days = Math.min(14, Math.max(1, Number(params.get('days')) || 7));
-  const tab = (TABS.find((t) => t.key === params.get('tab'))?.key ?? 'rec') as Tab;
+  const rawTab = params.get('tab');
+  const tab: Tab = rawTab === 'weather' ? 'day' : rawTab === 'spots' ? 'rec' : (TABS.find((t) => t.key === rawTab)?.key ?? 'rec');
   const criteria = parseCriteria(params.get('crit')) ?? storedCriteria() ?? DEFAULT_CRITERIA;
   const selected = parseLocal(params.get('at'));
 
@@ -122,6 +138,23 @@ export default function PlanShoot() {
   const [error, setError] = useState('');
   const [spotQuery, setSpotQuery] = useState('');
   const [copied, setCopied] = useState(false);
+  const [browseOpen, setBrowseOpen] = useState(() => params.get('tab') === 'spots');
+
+  useEffect(() => {
+    if (params.get('tab') === 'spots') {
+      setBrowseOpen(true);
+    }
+  }, [params.get('tab')]);
+
+  const toggleBrowse = () => {
+    setBrowseOpen((o) => {
+      const next = !o;
+      if (!next && params.get('tab') === 'spots') {
+        set({ tab: 'rec' });
+      }
+      return next;
+    });
+  };
 
   useEffect(() => { api.settings().then(setSettings).catch((err) => setError((err as Error).message)); }, []);
   const origin = from === 'map' ? readCentre() ?? settings?.home : settings?.home;
@@ -247,13 +280,22 @@ export default function PlanShoot() {
     try { await navigator.clipboard.writeText(url); } catch { window.prompt('Copy this link', url); }
     setCopied(true); setTimeout(() => setCopied(false), 1800);
   };
-  const pick = (d: Date) => set({ at: localIso(d) });
+  const pick = (d: Date) => set({ at: localIso(d), tab: 'day' });
 
   const filteredRows = rows.filter((r) => r.spot.name.toLowerCase().includes(spotQuery.toLowerCase()));
   const rs = plan ? sunriseSunset(focus, plan.lat, plan.lng) : null;
   const mp = moonPhase(focus);
-  const dayList = Array.from({ length: days }, (_, i) => addDays(fromDay, i));
+  const dayList = useMemo(() => Array.from({ length: days }, (_, i) => addDays(fromDay, i)), [fromDay.getTime(), days]);
   const dayPasses = trainPasses.filter((p) => startOfDay(p.at).getTime() === focusDay.getTime());
+  const dayWxSummaries = useMemo(() => {
+    if (!hourly) return new Map<number, string>();
+    const map = new Map<number, string>();
+    for (const d of dayList) {
+      const summary = dayWeatherSummary(hourly, d);
+      if (summary) map.set(d.getTime(), summary);
+    }
+    return map;
+  }, [hourly, dayList]);
 
   return (
     <div className="page plan">
@@ -266,13 +308,24 @@ export default function PlanShoot() {
       </div>
 
       <div className="plan__controls no-print">
-        <label className="plan__field plan__field--spot">Spot
-          <select value={plan?.id ?? ''} onChange={(e) => set({ spot: e.target.value, at: null })} aria-label="Spot">
-            {!plan && <option value="">{spots ? 'No spots' : 'Loading…'}</option>}
-            {plan && !rows.some((r) => r.spot.id === plan.id) && <option value={plan.id}>{plan.name}</option>}
-            {rows.map((r) => <option key={r.spot.id} value={r.spot.id}>{r.spot.name} · {r.km.toFixed(0)} km</option>)}
-          </select>
-        </label>
+        <div className="plan__field plan__field--spot">
+          <label htmlFor="plan-spot-select">Spot</label>
+          <div className="plan__spotselect">
+            <select id="plan-spot-select" value={plan?.id ?? ''} onChange={(e) => set({ spot: e.target.value, at: null })} aria-label="Spot">
+              {!plan && <option value="">{spots ? 'No spots' : 'Loading…'}</option>}
+              {plan && !rows.some((r) => r.spot.id === plan.id) && <option value={plan.id}>{plan.name}</option>}
+              {rows.map((r) => <option key={r.spot.id} value={r.spot.id}>{r.spot.name} · {r.km.toFixed(0)} km</option>)}
+            </select>
+            <button
+              type="button"
+              className={browseOpen ? 'active' : ''}
+              aria-expanded={browseOpen}
+              onClick={toggleBrowse}
+            >
+              Browse nearby
+            </button>
+          </div>
+        </div>
         <label className="plan__field">From
           <input type="date" value={ymd(fromDay)} onChange={(e) => set({ from: e.target.value || null, at: null })} />
         </label>
@@ -282,6 +335,45 @@ export default function PlanShoot() {
           </select>
         </label>
       </div>
+
+      {browseOpen && (
+        <section className="plan__browse no-print">
+          <div className="filterbar">
+            <div className="seg">
+              <button type="button" className={from === 'home' ? 'active' : ''} onClick={() => setFrom('home')}>From home{settings ? ` (${settings.home.name})` : ''}</button>
+              <button type="button" className={from === 'map' ? 'active' : ''} onClick={() => setFrom('map')}>From map centre</button>
+            </div>
+            <label className="toggle toggle--inline">Within {radiusKm} km
+              <input type="range" min={5} max={300} step={5} value={radiusKm} onChange={(e) => setRadiusKm(Number(e.target.value))} />
+            </label>
+            <input type="search" placeholder="Filter spots" value={spotQuery} onChange={(e) => setSpotQuery(e.target.value)} aria-label="Filter spots" />
+          </div>
+          <p className="hint">Ranked by the next good light or sun/moon alignment over the next {days} days; alignments rank higher, crowded venues lower.</p>
+          {filteredRows.length === 0 ? <div className="empty">No spots match.</div> : (
+            <div className="plan__tablewrap">
+              <table className="triptable">
+                <thead><tr><th></th><th>Spot</th><th>Distance</th><th>Next good light</th><th>Alignment</th></tr></thead>
+                <tbody>
+                  {filteredRows.map((r) => (
+                    <tr key={r.spot.id} className={plan?.id === r.spot.id ? 'active' : ''}>
+                      <td>
+                        <button type="button" onClick={() => {
+                          set({ spot: r.spot.id, at: null, tab: 'rec' });
+                          setBrowseOpen(false);
+                        }}>Plan</button>
+                      </td>
+                      <td><Link to={`/?spot=${r.spot.id}`}>{r.spot.name}</Link></td>
+                      <td>{r.km.toFixed(1)} km</td>
+                      <td>{r.good ? `${PHASE_LABEL[r.good.phase]} · ${when(r.good.start)}–${hhmm(r.good.end)}` : '—'}</td>
+                      <td>{r.align ? `${r.align.body === 'sun' ? '☀' : '☾'} ${when(r.align.start)} · ${Math.round(r.align.azimuth)}°` : '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+      )}
 
       <fieldset className="plan__criteria no-print">
         <legend>What are you after?</legend>
@@ -308,7 +400,7 @@ export default function PlanShoot() {
       </nav>
 
       <div className="no-print">
-        {!plan && tab !== 'spots' && spots && <div className="empty">No spots within {radiusKm} km. Try the Spots tab to widen the radius.</div>}
+        {!plan && spots && <div className="empty">No spots within {radiusKm} km. Try Browse nearby to widen the radius.</div>}
 
         {plan && tab === 'rec' && (
           <section>
@@ -318,7 +410,7 @@ export default function PlanShoot() {
                 <ol className="recs">
                   {recs.map((r, i) => (
                     <li key={r.t.getTime()} className={`rec${focusRec === r ? ' active' : ''}`}>
-                      <button className="rec__main" onClick={() => pick(r.t)}>
+                      <button type="button" className="rec__main" onClick={() => pick(r.t)}>
                         <span className="rec__rank">{i + 1}</span>
                         <span className="rec__when"><strong>{dayLabel(r.t)}</strong> {hhmm(r.t)}–{hhmm(r.end)}</span>
                         <span className="rec__score" title="Share of criteria met">{Math.round(r.score * 100)}%</span>
@@ -332,18 +424,37 @@ export default function PlanShoot() {
               )}
             {weather === null && <p className="hint">Weather unavailable{weatherErr ? ` (${weatherErr})` : ''}: weather criteria score neutral or zero.</p>}
             {criteria.includes('planes') && <p className="hint">Planes overhead only counts for right now: there's no forecast of future air traffic.</p>}
+            <details className="plan__bearing">
+              <summary>Match an exact bearing</summary>
+              <SunBearingPlanner
+                lat={plan.lat}
+                lng={plan.lng}
+                defaultBearingDeg={plan.facingDeg}
+                label="Exact bearing planner"
+                onApplyTime={pick}
+                showMap
+              />
+            </details>
           </section>
         )}
 
         {plan && tab === 'day' && (
           <section className="shootday">
             <div className="chiprow plan__days">
-              {dayList.map((d) => (
-                <button key={d.getTime()} className={`chip${d.getTime() === focusDay.getTime() ? ' active' : ''}`}
-                  onClick={() => pick(new Date(d.getFullYear(), d.getMonth(), d.getDate(), focus.getHours(), focus.getMinutes()))}>{dayLabel(d)}</button>
-              ))}
+              {dayList.map((d) => {
+                const wx = dayWxSummaries.get(d.getTime());
+                return (
+                  <button key={d.getTime()} type="button" className={`chip${d.getTime() === focusDay.getTime() ? ' active' : ''}`}
+                    onClick={() => pick(new Date(d.getFullYear(), d.getMonth(), d.getDate(), focus.getHours(), focus.getMinutes()))}>
+                    <span>{dayLabel(d)}</span>
+                    {wx && <span className="plan__daywx">{wx}</span>}
+                  </button>
+                );
+              })}
             </div>
             <label className="plan__field">Time <input type="time" value={hhmm24(focus)} onChange={(e) => { const [h, mi] = e.target.value.split(':').map(Number); if (!Number.isNaN(h)) pick(new Date(focus.getFullYear(), focus.getMonth(), focus.getDate(), h, mi)); }} /></label>
+            <h3>Preview</h3>
+            <ViewPreview lat={plan.lat} lng={plan.lng} facingDeg={plan.facingDeg} fovDeg={plan.fovDeg} time={focus} />
             <h3>Light</h3>
             <DayStrip lat={plan.lat} lng={plan.lng} time={focus} />
             {!shadeReady ? <p className="hint">Working out sun and shade…</p> : <LightStrip steps={daySteps} day={focusDay} />}
@@ -355,20 +466,19 @@ export default function PlanShoot() {
             <h3>Weather</h3>
             {hourly ? <><WeatherStrip hourly={hourly} day={focusDay} /><p className="hint">Shading = cloud cover · blue bar = rain chance · number = wind km/h</p></>
               : <p className="hint">{weather === 'loading' ? 'Loading forecast…' : 'Weather unavailable.'}</p>}
-          </section>
-        )}
-
-        {plan && tab === 'weather' && (
-          <section>
-            {weather === 'loading' ? <p className="hint">Loading forecast…</p> : !hourly ? <p className="hint">Weather unavailable{weatherErr ? ` (${weatherErr})` : ''}.</p> : (
+            {dayPasses.length > 0 && (
               <>
-                {dayList.map((d) => (
-                  <div key={d.getTime()} className="plan__wxday">
-                    <button className="linklike" onClick={() => set({ tab: 'day', at: localIso(new Date(d.getFullYear(), d.getMonth(), d.getDate(), 12)) })}>{dayLabel(d)}</button>
-                    <WeatherStrip hourly={hourly} day={d} />
-                  </div>
-                ))}
-                <p className="hint">Forecast fetched {new Date((weather as WeatherResponse).fetchedAt).toLocaleString()}. Accuracy drops beyond 2–3 days.</p>
+                <h3>Trains that day</h3>
+                <table className="triptable">
+                  <thead><tr><th>When</th><th>Route</th><th>To</th></tr></thead>
+                  <tbody>{dayPasses.map((p, i) => (
+                    <tr key={`${p.raw.tripId}-${p.raw.at}-${i}`}>
+                      <td><button type="button" className="linklike" onClick={() => pick(p.at)}>{hhmm(p.at)}</button></td>
+                      <td>{p.raw.route}</td>
+                      <td>{p.raw.headsign}</td>
+                    </tr>
+                  ))}</tbody>
+                </table>
               </>
             )}
           </section>
@@ -383,7 +493,7 @@ export default function PlanShoot() {
                 <table className="triptable">
                   <thead><tr><th>When</th><th>Route</th><th>To</th></tr></thead>
                   <tbody>{trainPasses.slice(0, 80).map((p) => (
-                    <tr key={`${p.raw.tripId}-${p.raw.at}`}><td><button className="linklike" onClick={() => pick(p.at)}>{when(p.at)}</button></td><td>{p.raw.route}</td><td>{p.raw.headsign}</td></tr>
+                    <tr key={`${p.raw.tripId}-${p.raw.at}`}><td><button type="button" className="linklike" onClick={() => pick(p.at)}>{when(p.at)}</button></td><td>{p.raw.route}</td><td>{p.raw.headsign}</td></tr>
                   ))}</tbody>
                 </table>
               )}
@@ -392,41 +502,7 @@ export default function PlanShoot() {
             {planes === null ? <p className="hint">Loading…</p> : planes === 'error' ? <p className="hint">Plane feed unavailable.</p> : planes.length === 0
               ? <p className="hint">No planes within {OVERHEAD_KM} km right now.</p>
               : <ul className="plainlist">{planes.map(({ p, km }) => <li key={p.hex}>✈ {p.flight?.trim() || p.hex} · {km.toFixed(1)} km · {p.alt_baro != null ? `${p.alt_baro} ft` : 'alt ?'}</li>)}</ul>}
-            <button onClick={loadPlanes}>Refresh planes</button>
-          </section>
-        )}
-
-        {tab === 'spots' && (
-          <section>
-            <div className="filterbar">
-              <div className="seg">
-                <button className={from === 'home' ? 'active' : ''} onClick={() => setFrom('home')}>From home{settings ? ` (${settings.home.name})` : ''}</button>
-                <button className={from === 'map' ? 'active' : ''} onClick={() => setFrom('map')}>From map centre</button>
-              </div>
-              <label className="toggle toggle--inline">Within {radiusKm} km
-                <input type="range" min={5} max={300} step={5} value={radiusKm} onChange={(e) => setRadiusKm(Number(e.target.value))} />
-              </label>
-              <input type="search" placeholder="Filter spots" value={spotQuery} onChange={(e) => setSpotQuery(e.target.value)} aria-label="Filter spots" />
-            </div>
-            <p className="hint">Ranked by the next good light or sun/moon alignment over the next {days} days; alignments rank higher, crowded venues lower.</p>
-            {filteredRows.length === 0 ? <div className="empty">No spots match.</div> : (
-              <div className="plan__tablewrap">
-                <table className="triptable">
-                  <thead><tr><th></th><th>Spot</th><th>Distance</th><th>Next good light</th><th>Alignment</th></tr></thead>
-                  <tbody>
-                    {filteredRows.map((r) => (
-                      <tr key={r.spot.id} className={plan?.id === r.spot.id ? 'active' : ''}>
-                        <td><button onClick={() => set({ spot: r.spot.id, at: null, tab: 'rec' })}>Plan</button></td>
-                        <td><Link to={`/?spot=${r.spot.id}`}>{r.spot.name}</Link></td>
-                        <td>{r.km.toFixed(1)} km</td>
-                        <td>{r.good ? `${PHASE_LABEL[r.good.phase]} · ${when(r.good.start)}–${hhmm(r.good.end)}` : '—'}</td>
-                        <td>{r.align ? `${r.align.body === 'sun' ? '☀' : '☾'} ${when(r.align.start)} · ${Math.round(r.align.azimuth)}°` : '—'}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
+            <button type="button" onClick={loadPlanes}>Refresh planes</button>
           </section>
         )}
       </div>
