@@ -17,7 +17,7 @@ import { applySettingsUpdate, getSettings, publicSettings, tfnswKey } from './se
 import { geocode } from './geocode.js';
 import { bboxFromRadius, haversine, parseBbox, parseLatLng } from './geo.js';
 import { parseGoodTimes, GoodTimesError, DEFAULT_GOOD_TIMES } from './goodTimes.js';
-import { fetchPlanes } from './feeds/planes.js';
+import { fetchPlanes, fetchPlaneInfo, isValidHex, isValidCallsign } from './feeds/planes.js';
 import { fetchWeather } from './feeds/weather.js';
 import { fetchFires } from './feeds/rfs.js';
 import { fetchAurora } from './feeds/spaceWeather.js';
@@ -652,6 +652,20 @@ app.get('/api/planes', async (req, res, next) => {
     if (!Number.isFinite(lat) || !Number.isFinite(lng)) return res.status(400).json({ error: 'lat and lng are required' });
     const baseUrl = process.env.ADSB_URL ?? 'https://api.adsb.lol';
     res.json(await fetchPlanes(baseUrl, lat, lng, nm));
+  } catch (err) { next(err); }
+});
+
+app.get('/api/planes/:hex/info', async (req, res, next) => {
+  try {
+    const { hex } = req.params;
+    if (!isValidHex(hex)) return res.status(400).json({ error: 'Invalid hex: must be 6 hex characters' });
+    let callsign: string | undefined = undefined;
+    if (req.query.callsign !== undefined && req.query.callsign !== '') {
+      const cs = String(req.query.callsign).trim();
+      if (!isValidCallsign(cs)) return res.status(400).json({ error: 'Invalid callsign: must be alphanumeric and up to 8 characters' });
+      callsign = cs;
+    }
+    res.json(await fetchPlaneInfo(hex, callsign));
   } catch (err) { next(err); }
 });
 

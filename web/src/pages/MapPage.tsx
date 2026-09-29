@@ -3,7 +3,7 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { GeoJSONSource, LngLatBounds, Map as MlMap, MapMouseEvent, Marker, NavigationControl, Popup, ScaleControl, setWorkerUrl } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
-import { api, Candidate, FireIncident, Place, Plane, Spot, TrainPosition, User, type WeatherForecast } from '../api.js';
+import { api, Candidate, FireIncident, Place, Plane, type PlaneInfo, Spot, TrainPosition, User, type WeatherForecast } from '../api.js';
 import { hourAt, pickRadarFrame, RAINVIEWER_INDEX, radarTileUrl, weatherIcon, type RadarIndex } from '../map/weather.js';
 import {
   CLICKABLE, initFeedLayers, initLayers, PLANE_LAYERS, setImagery, setLayerVisible, setTerrain3d, STYLE_URL, updateCandidates, updateDraft,
@@ -20,7 +20,7 @@ import { attachGlance, attachThumbLoader, GLANCE_LAYERS } from '../map/spotGlanc
 import { CATEGORIES, groupLayers, loadVisibility, saveVisibility, type Visibility } from '../map/legend.js';
 import { applyBaseRailHighlight, effectiveRailOn, restoreBaseRailHighlight, type BaseRailPaintSnapshot } from '../map/baseRailHighlight.js';
 import { buildRailPassPopupHtml, clickableRailLayerIds } from '../map/railPasses.js';
-import { deadReckon } from '../map/planes.js';
+import { deadReckon, formatPlaneDetails } from '../map/planes.js';
 import { useMapTime } from '../time.js';
 import TimeBar from '../components/TimeBar.js';
 import SpotPanel from '../components/SpotPanel.js';
@@ -700,7 +700,12 @@ export default function MapPage({ user }: { user: User | null }) {
         onHover={(at) => { if (map) setNearbyHighlight(map, at); }}
         following={follow?.id ?? null}
         onFollow={(kind, r) => (follow?.id === r.id ? setFollow(null) : startFollow(kind, r.id))}
-        onPlane={(r) => { if (map) map.flyTo({ center: [r.lng, r.lat], zoom: Math.max(map.getZoom(), 11) }); }}
+        onPlane={(r) => {
+          if (!map) return;
+          map.flyTo({ center: [r.lng, r.lat], zoom: Math.max(map.getZoom(), 11) });
+          const pl = planeData.find((x) => x.hex === r.id);
+          if (pl) showPlanePopup(map, pl, (id) => startFollow('plane', id));
+        }}
         onTrain={(r) => {
           if (!map) return;
           map.flyTo({ center: [r.lng, r.lat], zoom: Math.max(map.getZoom(), 12) });
@@ -866,13 +871,26 @@ function showTrainPopup(map: MlMap, f: GeoJSON.Feature, onFollow?: (id: string) 
   openPopup(map, (f.geometry as GeoJSON.Point).coordinates as [number, number], html, onFollow && p.id ? () => onFollow(p.id!) : undefined);
 }
 
-/** Popup for a clicked plane: callsign, type, altitude and speed, and a Follow button. */
-function showPlanePopup(map: MlMap, p: Plane, onFollow: (hex: string) => void) {
+function buildPlanePopupHtml(p: Plane, info?: PlaneInfo | null): string {
   const alt = p.alt_baro == null ? '' : p.alt_baro <= 0 ? ' · ground' : ` · ${Math.round((p.alt_baro * 0.3048) / 10) * 10} m`;
-  const html = `<strong>${escapeHtml(planeName(p))}</strong>${p.t ? ` <span>${escapeHtml(p.t)}</span>` : ''}<br/>`
+  const details = info ? formatPlaneDetails(info) : null;
+  return `<strong>${escapeHtml(planeName(p))}</strong>${p.t && (!details || !info?.type) ? ` <span>${escapeHtml(p.t)}</span>` : ''}<br/>`
+    + (details ? `<span>${escapeHtml(details)}</span><br/>` : '')
     + `<span>${p.gs != null ? `${Math.round(p.gs * 1.852)} km/h` : 'speed –'}${alt}</span>`
     + '<br/><button class="popup-follow" type="button">Follow</button>';
-  openPopup(map, [p.lon, p.lat], html, () => onFollow(p.hex));
+}
+
+/** Popup for a clicked plane: callsign, enriched info (adsbdb), altitude and speed, and a Follow button. */
+function showPlanePopup(map: MlMap, p: Plane, onFollow: (hex: string) => void) {
+  const popup = openPopup(map, [p.lon, p.lat], buildPlanePopupHtml(p), () => onFollow(p.hex));
+  api.planeInfo(p.hex, p.flight || undefined)
+    .then((info) => {
+      if (trainPopup.current === popup && popup.isOpen()) {
+        popup.setHTML(buildPlanePopupHtml(p, info));
+        popup.getElement()?.querySelector('.popup-follow')?.addEventListener('click', () => { popup.remove(); onFollow(p.hex); });
+      }
+    })
+    .catch(() => {});
 }
 
 function showRailPassPopup(map: MlMap, lat: number, lng: number) {

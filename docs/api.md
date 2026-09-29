@@ -43,6 +43,7 @@ Same auth rules as above.
 | Method | Path | Notes |
 |---|---|---|
 | GET | `/api/planes?lat=&lng=&nm=` | adsb.lol/airplanes.live aircraft near a point, cached 10s server-side. |
+| GET | `/api/planes/:hex/info?callsign=` | Lazy aircraft and route enrichment (adsbdb.com), cached in-memory. |
 | GET | `/api/rail` | Cached OSM rail network + nearby industrial/mine sites, GeoJSON. |
 | GET/POST | `/api/sightings` | Freight/coal train sightings. `?near=lat,lng&radiusKm=` or `?bbox=`. POST snaps to the nearest cached rail line. |
 | GET/PATCH/DELETE | `/api/sightings/:id` | |

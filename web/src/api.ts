@@ -136,6 +136,15 @@ export interface Remote {
 // --- phase 3: feeds ---
 
 export interface Plane { hex: string; flight: string; lat: number; lon: number; track: number | null; gs: number | null; alt_baro: number | null; t: string; seen: number }
+export interface PlaneInfo {
+  type: string | null;
+  manufacturer: string | null;
+  registration: string | null;
+  owner: string | null;
+  airline: string | null;
+  origin: string | null;
+  destination: string | null;
+}
 
 export interface RailFeature extends GeoJSON.Feature { properties: { id: string; kind: 'rail' | 'industrial' | 'mine' | 'works'; usage?: string; service?: string; name?: string } }
 
@@ -309,6 +318,10 @@ export const api = {
   aurora: () => fetch('/api/aurora').then((r) => json<AuroraData>(r)),
   // --- planes ---
   planes: (lat: number, lng: number, nm = 40) => fetch(`/api/planes?lat=${lat}&lng=${lng}&nm=${nm}`).then((r) => json<Plane[]>(r)),
+  planeInfo: (hex: string, callsign?: string) => {
+    const qs = callsign ? `?callsign=${encodeURIComponent(callsign)}` : '';
+    return fetch(`/api/planes/${encodeURIComponent(hex)}/info${qs}`).then((r) => json<PlaneInfo>(r));
+  },
   buildings: (lat: number, lng: number, r = 250) => fetch(`/api/buildings?lat=${lat}&lng=${lng}&r=${r}`).then((r) => json<GeoJSON.FeatureCollection>(r)),
 
   // --- rail ---
