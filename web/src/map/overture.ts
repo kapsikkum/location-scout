@@ -1,4 +1,8 @@
-/** Overture Maps buildings (PMTiles): far more footprints and heights than the base map's OSM buildings in regional NSW. */
+/**
+ * Overture Maps buildings (PMTiles), only those not from OSM (mostly Microsoft ML footprints with estimated heights).
+ * OSM's own buildings stay on the base map: Overture drops their heights and building parts (Bathurst Courthouse loses
+ * its tower and dome), while the base map keeps them.
+ */
 import { addProtocol, type Map as MlMap, type FilterSpecification, type VectorTileSource } from 'maplibre-gl';
 import { Protocol } from 'pmtiles';
 
@@ -14,11 +18,11 @@ export function latestRelease(catalog: { links?: { rel?: string; href?: string }
 
 /** Height in metres: Overture's height, else floors × 3 m, else 4 m. */
 export const HEIGHT = ['coalesce', ['get', 'height'], ['*', ['get', 'num_floors'], 3], 4] as const;
-const ABOVE_GROUND: FilterSpecification = ['!=', ['get', 'is_underground'], true];
+const EXTRA: FilterSpecification = ['all', ['!=', ['get', 'is_underground'], true], ['!=', ['get', '@geometry_source'], 'OpenStreetMap']];
 
 let registered = false;
 
-/** Swap the base style's building layers for Overture's, in the same place in the stack and with the same paint. */
+/** Beside each base-style building layer, the same layer drawn from Overture's non-OSM buildings (`<id>-overture`). */
 export function useOvertureBuildings(map: MlMap) {
   const layers = map.getStyle().layers ?? [];
   const base = layers.filter((l) => 'source-layer' in l && l['source-layer'] === 'building');
@@ -26,9 +30,8 @@ export function useOvertureBuildings(map: MlMap) {
   if (!registered) { addProtocol('pmtiles', new Protocol().tile); registered = true; }
   map.addSource('overture', { type: 'vector', url: overtureBuildingsUrl(PINNED), attribution: '© <a href="https://overturemaps.org">Overture Maps</a>' });
   for (const l of base) {
-    const at = layers.indexOf(l), before = layers[at + 1]?.id;
-    map.removeLayer(l.id);
-    const common = { id: l.id, source: 'overture', 'source-layer': 'building', minzoom: l.minzoom, filter: ABOVE_GROUND };
+    const before = layers[layers.indexOf(l) + 1]?.id;
+    const common = { id: `${l.id}-overture`, source: 'overture', 'source-layer': 'building', minzoom: l.minzoom, filter: EXTRA };
     if (l.type === 'fill-extrusion') {
       map.addLayer({ ...common, type: 'fill-extrusion', paint: { ...l.paint, 'fill-extrusion-height': HEIGHT as never, 'fill-extrusion-base': ['coalesce', ['get', 'min_height'], 0] } }, before);
     } else if (l.type === 'fill') {
