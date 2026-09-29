@@ -12,7 +12,7 @@ export interface Plane {
   seen: number; // seconds since last message
 }
 
-interface AdsbAircraft {
+export interface AdsbAircraft {
   hex: string;
   flight?: string;
   lat?: number;
@@ -61,6 +61,21 @@ function stale(key: string): Plane[] {
   return cache.get(key)?.planes ?? [...cache.values()].sort((a, b) => b.at - a.at)[0]?.planes ?? [];
 }
 
+/** adsb.fi's open data API: the same readsb records, from a different receiver network. */
+const ADSB_FI = 'https://opendata.adsb.fi/api/v2';
+
+/** The configured feed plus adsb.fi, so a plane seen by either network shows up. */
+function sourceUrls(baseUrl: string, lat: number, lng: number, nm: number): string[] {
+  return [`${baseUrl.replace(/\/$/, '')}/v2/point/${lat}/${lng}/${nm}`, `${ADSB_FI}/lat/${lat}/lon/${lng}/dist/${nm}`];
+}
+
+/** Aircraft from several feeds, one per ICAO hex; the first feed that has a plane wins. Failed feeds are null. */
+export function mergeAircraft(lists: (AdsbAircraft[] | null)[]): AdsbAircraft[] {
+  const byHex = new Map<string, AdsbAircraft>();
+  for (const list of lists) for (const a of list ?? []) { const hex = String(a.hex ?? '').toLowerCase(); if (hex && !byHex.has(hex)) byHex.set(hex, a); }
+  return [...byHex.values()];
+}
+
 export async function fetchPlanes(baseUrl: string, lat: number, lng: number, nm: number): Promise<Plane[]> {
   const key = cacheKey(lat, lng, nm);
   const hit = cache.get(key);
@@ -76,17 +91,22 @@ export async function fetchPlanes(baseUrl: string, lat: number, lng: number, nm:
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
     try {
-      const url = `${baseUrl.replace(/\/$/, '')}/v2/point/${sLat}/${sLng}/${sNm}`;
-      // adsb.lol 403s a request with no User-Agent at all (Node's fetch sends none by default).
-      const res = await fetch(url, { headers: { 'User-Agent': 'location-scout/0.1 (local personal app)' }, signal: controller.signal });
-      if (res.status === 429) {
-        const retry = Number(res.headers.get('retry-after'));
-        backoffUntil = Date.now() + (Number.isFinite(retry) && retry > 0 ? retry * 1000 : 60_000);
-        return stale(key);
+      const lists = await Promise.all(sourceUrls(baseUrl, sLat, sLng, sNm).map(async (url) => {
+        // adsb.lol 403s a request with no User-Agent at all (Node's fetch sends none by default).
+        const res = await fetch(url, { headers: { 'User-Agent': 'location-scout/0.1 (local personal app)' }, signal: controller.signal }).catch(() => null);
+        if (res?.status === 429) {
+          const retry = Number(res.headers.get('retry-after'));
+          backoffUntil = Date.now() + (Number.isFinite(retry) && retry > 0 ? retry * 1000 : 60_000);
+        }
+        if (!res?.ok) return null;
+        const data = (await res.json().catch(() => null)) as { ac?: AdsbAircraft[]; aircraft?: AdsbAircraft[] } | null;
+        return data ? (data.ac ?? data.aircraft ?? []) : null;
+      }));
+      if (lists.every((l) => l === null)) {
+        if (Date.now() < backoffUntil) return stale(key);
+        throw new Error('no plane source answered');
       }
-      if (!res.ok) throw new Error(`${url} returned ${res.status}`);
-      const data = (await res.json()) as { ac?: AdsbAircraft[] };
-      const planes = (data.ac ?? []).map(toPlane).filter((pl): pl is Plane => pl !== null);
+      const planes = mergeAircraft(lists).map(toPlane).filter((pl): pl is Plane => pl !== null);
       cache.set(key, { at: Date.now(), planes });
       return planes;
     } finally {

@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import {
+  mergeAircraft,
   deadReckon,
   isValidHex,
   isValidCallsign,
@@ -281,4 +282,13 @@ test('fetchPlaneInfo: integrates aircraft and route data, with caching and fallb
   } finally {
     server.close();
   }
+});
+
+test('mergeAircraft: one aircraft per hex, first feed wins, failed feeds skipped', () => {
+  const lol = [{ hex: '7C7BF3', flight: 'YRP' }, { hex: '7c0001' }];
+  const fi = [{ hex: '7c7bf3', flight: 'OTHER' }, { hex: '7c0002' }];
+  const merged = mergeAircraft([lol, null, fi]);
+  assert.deepEqual(merged.map((a) => a.hex), ['7C7BF3', '7c0001', '7c0002']);
+  assert.equal(merged[0].flight, 'YRP');
+  assert.deepEqual(mergeAircraft([null, null]), []);
 });
