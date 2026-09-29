@@ -63,7 +63,7 @@ export const CATEGORIES: Category[] = [
   { key: 'planes', label: 'Planes', group: 'Overlays', swatch: 'dashed', color: '#dfe7ff', defaultOn: false, match: ids('planes', 'planes-proj', 'planes-ghost', 'planes-shadow', 'planes-label', 'planes-3d') },
   { key: 'weather', label: 'Weather radar & readout', group: 'Overlays', swatch: 'fill', color: '#3aa0ff', defaultOn: false, match: ids('radar') },
   { key: 'fires', label: 'Bush fire incidents', group: 'Overlays', swatch: 'dot', color: '#f97316', defaultOn: false, match: ids('fires-pts', 'fires-polys-line', 'fires-polys-fill') },
-  { key: 'cameras', label: 'Traffic cameras', group: 'Overlays', swatch: 'dot', color: '#38bdf8', defaultOn: false, match: ids('cameras') },
+  { key: 'cameras', label: 'Traffic cameras', group: 'Overlays', swatch: 'dot', color: '#38bdf8', defaultOn: false, match: ids('camera-cones', 'cameras') },
   { key: 'candidates', label: 'OSM candidates', group: 'Overlays', swatch: 'dot', color: '#6b7280', defaultOn: false, match: ids('candidates') },
 ];
 

@@ -1,4 +1,5 @@
 /** Weather for Plan shoot: api.weather (Open-Meteo via GET /api/weather), with missing values filled so scoring stays numeric. */
+import { compass } from '../map/spotGlance.js';
 import { api, type WeatherHour as ApiWeatherHour, type MarineData, type MarineHour } from '../api.js';
 import type { WeatherHour, WeatherResponse } from '../map/recommend.js';
 
@@ -30,10 +31,6 @@ export async function fetchMarine(lat: number, lng: number): Promise<MarineData>
   return api.marine(lat, lng);
 }
 
-const COMPASS = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW'];
-export function compassDir(deg: number): string {
-  return COMPASS[Math.round((((deg % 360) + 360) % 360) / 22.5) % 16];
-}
 
 /** Format tides and swell for a coastal spot on a specific day: e.g. "Low 06:42 (0.3 m) · High 12:58 (1.6 m) · Swell 1.8 m SE 11 s". */
 export function formatMarineDay(
@@ -80,7 +77,7 @@ export function formatMarineDay(
 
       const swellTokens: string[] = [];
       if (height != null) swellTokens.push(`${height.toFixed(1)} m`);
-      if (dir != null) swellTokens.push(compassDir(dir));
+      if (dir != null) swellTokens.push(compass(dir));
       if (period != null) swellTokens.push(`${Math.round(period)} s`);
 
       if (swellTokens.length > 0) {

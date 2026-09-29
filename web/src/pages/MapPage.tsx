@@ -280,7 +280,7 @@ export default function MapPage({ user }: { user: User | null }) {
   // NSW Live Traffic cameras: fetched when the layer is on and polled every 10 min.
   useEffect(() => {
     if (!map) return;
-    setLayerVisible(map, ['cameras'], !!camerasOn);
+    setLayerVisible(map, ['camera-cones', 'cameras'], !!camerasOn);
     if (!camerasOn) return;
     let stop = false;
     const load = () => {

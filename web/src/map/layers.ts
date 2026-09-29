@@ -1,7 +1,7 @@
 /** MapLibre sources and layers: base extras (imagery, DEM), light (mood, rays, shadows) and our places/spots. */
 import { GeoJSONSource, Map as MlMap, type RasterTileSource, type LightSpecification } from 'maplibre-gl';
 import type { FireIncident, Place, Spot, TrafficCamera } from '../api.js';
-import { ICON, thumbIconId } from './spotGlance.js';
+import { cameraBearing, ICON, thumbIconId } from './spotGlance.js';
 import { destination, wedge } from './geo.js';
 import { buildingShadows, MIN_SHADOW_ALT, type Footprint } from './shadows.js';
 import type { ShadowJob } from './shadows.worker.js';
@@ -262,12 +262,14 @@ export function initFeedLayers(map: MlMap) {
     paint: { 'circle-radius': 6, 'circle-color': FIRE_COLOR, 'circle-stroke-color': '#0e1014', 'circle-stroke-width': 1.5 },
   });
 
-  // NSW Live Traffic cameras: points coloured bright sky-blue
+  // NSW Live Traffic cameras: a camera glyph (places are plain dots) with a cone the way it looks.
+  if (!map.hasImage('camera')) map.addImage('camera', cameraIcon(), { pixelRatio: 2 });
+  map.addSource('camera-cones', { type: 'geojson', data: empty() });
+  map.addLayer({ id: 'camera-cones', type: 'fill', source: 'camera-cones', layout: { visibility: 'none' },
+    paint: { 'fill-color': '#38bdf8', 'fill-opacity': 0.18, 'fill-outline-color': '#38bdf8' } });
   map.addSource('cameras', { type: 'geojson', data: empty(), attribution: '© Transport for NSW' });
-  map.addLayer({
-    id: 'cameras', type: 'circle', source: 'cameras', layout: { visibility: 'none' },
-    paint: { 'circle-radius': 6, 'circle-color': '#38bdf8', 'circle-stroke-color': '#0e1014', 'circle-stroke-width': 1.5 },
-  });
+  map.addLayer({ id: 'cameras', type: 'symbol', source: 'cameras',
+    layout: { visibility: 'none', 'icon-image': 'camera', 'icon-allow-overlap': true, 'icon-ignore-placement': true } });
 }
 
 /** Layers the user has switched off (legend/chips); code that toggles visibility itself must respect this. */
@@ -446,8 +448,32 @@ export function camerasGeoJSON(cameras: TrafficCamera[]): GeoJSON.FeatureCollect
   };
 }
 
+/** 60° cones 350 m long for cameras whose facing is known. */
+export function cameraConesGeoJSON(cameras: TrafficCamera[]): GeoJSON.FeatureCollection {
+  const features: GeoJSON.Feature[] = [];
+  for (const c of cameras) {
+    const b = cameraBearing(c.direction ?? '', c.view ?? '');
+    if (b != null) features.push({ type: 'Feature', properties: { id: c.id }, geometry: { type: 'Polygon', coordinates: [wedge(c.point[1], c.point[0], b, 60, 0.35)] } });
+  }
+  return { type: 'FeatureCollection', features };
+}
+
 export function updateCameras(map: MlMap, cameras: TrafficCamera[]) {
   setData(map, 'cameras', camerasGeoJSON(cameras));
+  setData(map, 'camera-cones', cameraConesGeoJSON(cameras));
+}
+
+/** Sky-blue camera on a dark disc, drawn at 2x. */
+function cameraIcon(): ImageData {
+  const c = document.createElement('canvas');
+  c.width = c.height = 44;
+  const g = c.getContext('2d')!;
+  const disc = (r: number, y = 22) => { g.beginPath(); g.arc(22, y, r, 0, Math.PI * 2); g.fill(); };
+  g.fillStyle = '#0e1014'; disc(21);
+  g.fillStyle = '#38bdf8'; g.beginPath(); g.roundRect(9, 15, 26, 17, 3); g.fill(); g.fillRect(16, 11, 10, 5);
+  g.fillStyle = '#0e1014'; disc(5.5, 23.5);
+  g.fillStyle = '#38bdf8'; disc(3, 23.5);
+  return g.getImageData(0, 0, 44, 44);
 }
 
 export const CLICKABLE = ['spot-thumbs', 'place-spot-thumbs', 'spot-points', 'place-spots', 'clusters', 'place-points', 'place-fill', 'place-line', 'candidates', 'fires-pts', 'fires-polys-fill', 'fires-polys-line', 'cameras'];
