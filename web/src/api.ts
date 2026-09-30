@@ -222,9 +222,11 @@ export interface ScoutEvent {
   group: string; title: string; description: string; startTime: string; endTime: string; venueName: string;
   address: string; locality: string; lat: number; lng: number; imageUrl: string | null; category: string; goodDuring: boolean;
 }
+/** Best stretch of hours to shoot today; `to` is inclusive. */
+export interface CrowdBestWindow { from: number; to: number; label: string }
 export interface NearbyResult {
   events: ScoutEvent[];
-  crowd: { venue: string; live: number | null; typical: number | null; score: number | null; bestWindow: string | null } | null;
+  crowd: { venue: string; live: number | null; typical: number | null; score: number | null; bestWindow: CrowdBestWindow | null } | null;
   status: 'ok' | 'not_configured';
 }
 

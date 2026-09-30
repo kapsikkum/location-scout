@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { filterEventsNearby, flagEventKeywords, nearestVenue, ScoutEvent } from '../src/feeds/eventScout.js';
+import { bestWindowFor, filterEventsNearby, flagEventKeywords, nearestVenue, ScoutEvent } from '../src/feeds/eventScout.js';
 
 const bathurst = { lat: -33.419, lng: 149.577 };
 
@@ -41,4 +41,22 @@ test('nearestVenue: picks the closest venue across areas, within maxKm', () => {
 test('nearestVenue: null when nothing is within range', () => {
   const areaVenues = [{ slug: 'a', venues: [{ name: 'Distant', lat: bathurst.lat + 10, lon: bathurst.lng, live: null, typical: null, score: null, observedAt: null, busiestDay: null, busiestHour: null, quietestDay: null, openDays: [], shoot: false }] }];
   assert.equal(nearestVenue(areaVenues, bathurst.lat, bathurst.lng), null);
+});
+
+test('bestWindowFor: picks the given weekday from daySummary, keyed 0=Sunday', () => {
+  // JSON object keys arrive as strings.
+  const history = JSON.parse(JSON.stringify({
+    daySummary: {
+      0: { readings: 3, live: 1, best: { from: 6, to: 8, score: 0.7, label: 'Good' } },
+      3: { readings: 5, live: 2, best: { from: 14, to: 15, score: 0.5, label: 'Fair' } },
+      4: { readings: 0, live: 0, best: null },
+    },
+    now: null,
+  }));
+  assert.deepEqual(bestWindowFor(history, 3), { from: 14, to: 15, label: 'Fair' });
+  assert.deepEqual(bestWindowFor(history, 0), { from: 6, to: 8, label: 'Good' });
+  assert.equal(bestWindowFor(history, 4), null);
+  assert.equal(bestWindowFor(history, 5), null);
+  assert.equal(bestWindowFor(null, 3), null);
+  assert.equal(bestWindowFor({ daySummary: { 1: { best: 'morning' as never } }, now: null }, 1), null);
 });

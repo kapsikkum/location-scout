@@ -63,3 +63,30 @@ export function trainRows(trains: TrainLike[], centre: { lat: number; lng: numbe
 export function capRows<T>(rows: T[], expanded: boolean, cap = NEARBY_CAP): T[] {
   return expanded ? rows : rows.slice(0, cap);
 }
+
+// --- Event Scout crowd line -------------------------------------------------------
+
+/** A whole hour (0-24) as a compact 12h label: 0 and 24 → "12am", 13 → "1pm". */
+export function formatHour(hour: number): string {
+  const h = ((Math.round(hour) % 24) + 24) % 24;
+  return `${h % 12 === 0 ? 12 : h % 12}${h < 12 ? 'am' : 'pm'}`;
+}
+
+/** Event Scout's best window (`to` inclusive) as "7am–10am (good)". */
+export function formatBestWindow(w: { from: number; to: number; label?: string } | null | undefined): string | null {
+  if (!w || !Number.isFinite(w.from) || !Number.isFinite(w.to)) return null;
+  const range = `${formatHour(w.from)}–${formatHour(w.to + 1)}`;
+  return w.label ? `${range} (${w.label.toLowerCase()})` : range;
+}
+
+/** "Venue: 40% busy now vs 66% typical · best 7am–10am (good)", saying so plainly when there's no live reading. */
+export function crowdSummary(crowd: { venue: string; live: number | null; typical: number | null; bestWindow?: { from: number; to: number; label?: string } | null }): string {
+  const { live, typical } = crowd;
+  const busy =
+    live != null && typical != null ? `${live}% busy now vs ${typical}% typical`
+    : live != null ? `${live}% busy now`
+    : typical != null ? `usually ${typical}% busy at this hour (no live reading)`
+    : 'no busyness reading right now';
+  const best = formatBestWindow(crowd.bestWindow);
+  return `${crowd.venue}: ${busy}${best ? ` · best ${best}` : ''}`;
+}

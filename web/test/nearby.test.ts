@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { capRows, formatAltitude, formatDelay, formatDistance, formatSpeed, planeRows, trainRows } from '../src/map/nearby.js';
+import { capRows, crowdSummary, formatAltitude, formatBestWindow, formatHour, formatDelay, formatDistance, formatSpeed, planeRows, trainRows } from '../src/map/nearby.js';
 
 const centre = { lat: -33.4, lng: 149.5 };
 
@@ -45,4 +45,27 @@ test('capRows', () => {
   const r = Array.from({ length: 20 }, (_, i) => i);
   assert.equal(capRows(r, false).length, 15);
   assert.equal(capRows(r, true).length, 20);
+});
+
+test('formatHour / formatBestWindow: 12h hours, window end is to + 1', () => {
+  assert.equal(formatHour(0), '12am');
+  assert.equal(formatHour(7), '7am');
+  assert.equal(formatHour(12), '12pm');
+  assert.equal(formatHour(17), '5pm');
+  assert.equal(formatHour(24), '12am');
+  assert.equal(formatBestWindow({ from: 7, to: 9, label: 'Good' }), '7am–10am (good)');
+  assert.equal(formatBestWindow({ from: 16, to: 16, label: '' }), '4pm–5pm');
+  assert.equal(formatBestWindow(null), null);
+});
+
+test('crowdSummary: live vs typical, and plain wording when a reading is missing', () => {
+  const base = { venue: 'Boundary Road Reserve', bestWindow: null };
+  assert.equal(crowdSummary({ ...base, live: 40, typical: 66 }), 'Boundary Road Reserve: 40% busy now vs 66% typical');
+  assert.equal(crowdSummary({ ...base, live: 40, typical: null }), 'Boundary Road Reserve: 40% busy now');
+  assert.equal(crowdSummary({ ...base, live: null, typical: 66 }), 'Boundary Road Reserve: usually 66% busy at this hour (no live reading)');
+  assert.equal(crowdSummary({ ...base, live: null, typical: null }), 'Boundary Road Reserve: no busyness reading right now');
+  assert.equal(
+    crowdSummary({ venue: 'Boundary Road Reserve', live: null, typical: 66, bestWindow: { from: 6, to: 8, label: 'Good' } }),
+    'Boundary Road Reserve: usually 66% busy at this hour (no live reading) · best 6am–9am (good)',
+  );
 });
