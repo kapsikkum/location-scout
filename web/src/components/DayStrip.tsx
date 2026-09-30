@@ -3,7 +3,16 @@ import { dayPhases, moonPhase, moonUpBands, PHASE_COLOR, PHASE_LABEL, sunriseSun
 import { hhmm } from '../time.js';
 
 /** The day's light phases and when the moon is up, with a marker at `time`. */
-export default function DayStrip({ lat, lng, time, compact }: { lat: number; lng: number; time: Date; compact?: boolean }) {
+export default function DayStrip({
+  lat, lng, time, compact, sunriseBadge, sunsetBadge,
+}: {
+  lat: number;
+  lng: number;
+  time: Date;
+  compact?: boolean;
+  sunriseBadge?: string | null;
+  sunsetBadge?: string | null;
+}) {
   const dayKey = time.toDateString();
   const { bands, moon, rs, start, span } = useMemo(() => {
     const bands = dayPhases(time, lat, lng);
@@ -35,9 +44,15 @@ export default function DayStrip({ lat, lng, time, compact }: { lat: number; lng
       </div>
       {!compact && (
         <div className="daystrip__legend">
-          <span>☀ {rs.sunrise ? hhmm(rs.sunrise.time) : '—'} ({rs.sunrise ? Math.round(rs.sunrise.azimuth) : '—'}°)</span>
+          <span>
+            ☀ {rs.sunrise ? hhmm(rs.sunrise.time) : '—'} ({rs.sunrise ? Math.round(rs.sunrise.azimuth) : '—'}°)
+            {sunriseBadge && <span className="nearby__badge" style={{ marginLeft: 6 }}>{sunriseBadge}</span>}
+          </span>
           <span>☾ {mp.name}</span>
-          <span>{rs.sunset ? hhmm(rs.sunset.time) : '—'} ({rs.sunset ? Math.round(rs.sunset.azimuth) : '—'}°) ☀</span>
+          <span>
+            {sunsetBadge && <span className="nearby__badge" style={{ marginRight: 6 }}>{sunsetBadge}</span>}
+            {rs.sunset ? hhmm(rs.sunset.time) : '—'} ({rs.sunset ? Math.round(rs.sunset.azimuth) : '—'}°) ☀
+          </span>
         </div>
       )}
     </div>

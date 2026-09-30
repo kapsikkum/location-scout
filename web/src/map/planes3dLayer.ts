@@ -30,27 +30,38 @@ export function translated(m: ArrayLike<number>, o: [number, number, number]): F
   return r;
 }
 
+export interface ColouredProgram extends WebGLProgram {
+  _uMatrix?: WebGLUniformLocation | null;
+  _uAlpha?: WebGLUniformLocation | null;
+  _aPos?: number;
+  _aCol?: number;
+}
+
 /** The shared colour-per-vertex program (a_pos vec3, a_color vec4, u_matrix, u_alpha); also used by trains3dLayer. */
-export function colourProgram(gl: WebGLRenderingContext | WebGL2RenderingContext): WebGLProgram {
+export function colourProgram(gl: WebGLRenderingContext | WebGL2RenderingContext): ColouredProgram {
   const sh = (type: number, s: string) => { const x = gl.createShader(type)!; gl.shaderSource(x, s); gl.compileShader(x); return x; };
-  const p = gl.createProgram()!;
+  const p = gl.createProgram() as ColouredProgram;
   gl.attachShader(p, sh(gl.VERTEX_SHADER, VS));
   gl.attachShader(p, sh(gl.FRAGMENT_SHADER, FS));
   gl.linkProgram(p);
+  p._uMatrix = gl.getUniformLocation(p, 'u_matrix');
+  p._uAlpha = gl.getUniformLocation(p, 'u_alpha');
+  p._aPos = gl.getAttribLocation(p, 'a_pos');
+  p._aCol = gl.getAttribLocation(p, 'a_color');
   return p;
 }
 
 /** Draw interleaved [x, y, z, r, g, b, a] vertex lists with the colour program. */
 export function drawColoured(
-  gl: WebGLRenderingContext | WebGL2RenderingContext, prog: WebGLProgram, buf: WebGLBuffer, matrix: Float32Array, alpha: number,
+  gl: WebGLRenderingContext | WebGL2RenderingContext, prog: ColouredProgram, buf: WebGLBuffer, matrix: Float32Array, alpha: number,
   batches: readonly (readonly [number[], number])[],
 ) {
   gl.useProgram(prog);
-  gl.uniformMatrix4fv(gl.getUniformLocation(prog, 'u_matrix'), false, matrix);
-  gl.uniform1f(gl.getUniformLocation(prog, 'u_alpha'), alpha);
+  gl.uniformMatrix4fv(prog._uMatrix ?? gl.getUniformLocation(prog, 'u_matrix'), false, matrix);
+  gl.uniform1f(prog._uAlpha ?? gl.getUniformLocation(prog, 'u_alpha'), alpha);
   gl.bindBuffer(gl.ARRAY_BUFFER, buf);
-  const aPos = gl.getAttribLocation(prog, 'a_pos');
-  const aCol = gl.getAttribLocation(prog, 'a_color');
+  const aPos = prog._aPos ?? gl.getAttribLocation(prog, 'a_pos');
+  const aCol = prog._aCol ?? gl.getAttribLocation(prog, 'a_color');
   gl.enableVertexAttribArray(aPos);
   gl.enableVertexAttribArray(aCol);
   for (const [data, mode] of batches) {
@@ -67,7 +78,7 @@ export class Planes3dLayer implements CustomLayerInterface {
   type = 'custom' as const;
   renderingMode = '3d' as const;
   private map?: MlMap;
-  private prog?: WebGLProgram;
+  private prog?: ColouredProgram;
   private buf?: WebGLBuffer;
   private planes: Plane3d[] = [];
 
@@ -96,12 +107,25 @@ export class Planes3dLayer implements CustomLayerInterface {
     const mpp = (156_543.03 * Math.cos((c.lat * Math.PI) / 180)) / 2 ** map.getZoom();
     const spanM = Math.max(MIN_SPAN_M, SPAN_PX * mpp);
     const exag = map.getTerrain()?.exaggeration ?? 1;
+    const hasTerrain = !!map.getTerrain();
+
+    const elevCache = new Map<string, number>();
+    const getElev = (lng: number, lat: number): number => {
+      if (!hasTerrain) return 0;
+      const key = `${lng.toFixed(4)},${lat.toFixed(4)}`;
+      let el = elevCache.get(key);
+      if (el === undefined) {
+        el = map.queryTerrainElevation([lng, lat]) ?? 0;
+        elevCache.set(key, el);
+      }
+      return el;
+    };
 
     const tris: number[] = [];
     const lines: number[] = [];
     const push = (arr: number[], x: number, y: number, z: number, col: number[]) => arr.push(x - o[0], y - o[1], z, ...col);
     for (const pl of this.planes) {
-      const ground = map.getTerrain() ? (map.queryTerrainElevation([pl.lng, pl.lat]) ?? 0) : 0;
+      const ground = getElev(pl.lng, pl.lat);
       const z = renderAltitude(pl.altM, ground, exag);
       const mc = MercatorCoordinate.fromLngLat([pl.lng, pl.lat], z);
       const g = MercatorCoordinate.fromLngLat([pl.lng, pl.lat], ground);

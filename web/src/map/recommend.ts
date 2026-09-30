@@ -6,7 +6,7 @@ import type { Phase } from './sun.js';
 import type { Light } from './shootPlan.js';
 import { haversineKm } from './geo.js';
 
-export type Criterion = 'golden' | 'blue' | 'sun' | 'shade' | 'align' | 'clear' | 'drama' | 'fog' | 'dry' | 'calm' | 'train' | 'planes';
+export type Criterion = 'golden' | 'blue' | 'sun' | 'shade' | 'align' | 'milky-way' | 'clear' | 'drama' | 'fog' | 'dry' | 'calm' | 'train' | 'planes';
 
 export const CRITERIA: { key: Criterion; label: string; hint: string }[] = [
   { key: 'golden', label: 'Golden hour', hint: 'Low warm sun around sunrise and sunset' },
@@ -14,6 +14,7 @@ export const CRITERIA: { key: Criterion; label: string; hint: string }[] = [
   { key: 'sun', label: 'Sun on spot', hint: 'Not shaded by terrain or buildings' },
   { key: 'shade', label: 'Open shade', hint: 'Daylight with the spot in shade: soft, even light' },
   { key: 'align', label: 'Sun/moon alignment', hint: 'Sun or moon lines up with the spot’s facing' },
+  { key: 'milky-way', label: 'Milky Way core', hint: 'Core up, astronomical night, no moon' },
   { key: 'clear', label: 'Clear sky', hint: 'Little cloud' },
   { key: 'drama', label: 'Dramatic cloud', hint: 'Mid/high cloud 30–70%, low cloud light' },
   { key: 'fog', label: 'Fog / mist', hint: 'Fog likely or low visibility' },
@@ -62,12 +63,13 @@ const r = (n: number) => Math.round(n);
 export interface SlotScore { t: Date; score: number; reasons: string[]; misses: string[] }
 export interface ScoreInput {
   slots: Slot[]; criteria: Criterion[]; weather?: WeatherHour[] | null; passes?: Pass[]; alignments?: Window[];
+  milkyWay?: Window[] | { start: Date; end: Date; label?: string }[];
   now?: Date; livePlanes?: number | null; trainWindowMin?: number; fmt?: (d: Date) => string;
 }
 
 /** Each selected criterion scores 0–1 for the slot; the slot's score is their mean. */
 export function scoreSlots(input: ScoreInput): SlotScore[] {
-  const { slots, criteria, weather, passes = [], alignments = [], now = new Date(), livePlanes = null, trainWindowMin = 10 } = input;
+  const { slots, criteria, weather, passes = [], alignments = [], milkyWay = [], now = new Date(), livePlanes = null, trainWindowMin = 10 } = input;
   const fmt = input.fmt ?? ((d: Date) => `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`);
   const crit = criteria.length ? criteria : DEFAULT_CRITERIA;
   return slots.map((s) => {
@@ -87,6 +89,11 @@ export function scoreSlots(input: ScoreInput): SlotScore[] {
         case 'align': {
           const a = alignments.find((x) => s.t >= x.start && s.t < x.end);
           add(a ? 1 : 0, a ? a.label : null, 'no alignment'); break;
+        }
+        case 'milky-way': {
+          const mw = milkyWay.find((x) => s.t >= x.start && s.t < x.end);
+          add(mw ? 1 : 0, mw ? ('label' in mw && mw.label ? mw.label : 'Milky Way core') : null, 'no Milky Way core');
+          break;
         }
         case 'clear': w ? add(1 - w.cloudPct / 60, `${r(w.cloudPct)}% cloud`, `${r(w.cloudPct)}% cloud`) : add(0, null, 'no forecast'); break;
         case 'drama': {

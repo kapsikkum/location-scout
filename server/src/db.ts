@@ -72,7 +72,9 @@ CREATE TABLE IF NOT EXISTS photos (
   h INTEGER NOT NULL DEFAULT 0,
   taken_at TEXT,
   caption TEXT NOT NULL DEFAULT '',
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  focal_length REAL,
+  date_time_original TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_photos_spot ON photos(spot_id);
 
@@ -126,6 +128,23 @@ CREATE TABLE IF NOT EXISTS kv (
   value TEXT NOT NULL,
   expires_at TEXT
 );
+
+CREATE TABLE IF NOT EXISTS routes (
+  id TEXT PRIMARY KEY,
+  owner_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  notes TEXT NOT NULL DEFAULT '',
+  access TEXT NOT NULL DEFAULT '',
+  type TEXT NOT NULL DEFAULT 'sprint',
+  vertices TEXT NOT NULL DEFAULT '[]',
+  waypoints TEXT,
+  snap INTEGER NOT NULL DEFAULT 0,
+  staging TEXT,
+  visibility TEXT NOT NULL DEFAULT 'private',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_routes_owner ON routes(owner_id);
 
 -- GTFS static data for trains, filtered at import time to trips touching a
 -- configured area. One feed's rows share the 'feed' column ('nswtrains' | 'sydneytrains').
@@ -208,6 +227,10 @@ export function createDb(filePath: string = path.join(dataDir, 'location-scout.d
   if (filePath !== ':memory:') handle.exec('PRAGMA journal_mode = WAL');
   handle.exec(SCHEMA);
   addColumnIfMissing(handle, 'sightings', 'loaded', 'loaded INTEGER');
+  addColumnIfMissing(handle, 'photos', 'focal_length', 'focal_length REAL');
+  addColumnIfMissing(handle, 'photos', 'date_time_original', 'date_time_original TEXT');
+  addColumnIfMissing(handle, 'routes', 'waypoints', 'waypoints TEXT');
+  addColumnIfMissing(handle, 'routes', 'snap', 'snap INTEGER NOT NULL DEFAULT 0');
 
   function getKv(key: string): string | null {
     const row = handle.prepare('SELECT value, expires_at FROM kv WHERE key = ?').get(key) as

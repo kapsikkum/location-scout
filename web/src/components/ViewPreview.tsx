@@ -46,7 +46,8 @@ export default function ViewPreview({ lat, lng, facingDeg, fovDeg, time }: ViewP
     registerTerrainShadowProtocol(SHADOW_COLOR);
     const m = new MlMap({ container: container.current!, style: STYLE_URL, center: [lng, lat], zoom: 18, pitch: 85, maxPitch: 89, interactive: true, attributionControl: false });
     m.once('style.load', () => {
-      m.addSource('dem', { type: 'raster-dem', tiles: [TERRARIUM], tileSize: 256, maxzoom: 15, encoding: 'terrarium' });
+      try { m.setSourceTileLodParams(4.0, 1.8); } catch { /* ignore */ }
+      m.addSource('dem', { type: 'raster-dem', tiles: [TERRARIUM], tileSize: 256, maxzoom: 14, encoding: 'terrarium' });
       m.setTerrain({ source: 'dem', exaggeration: 1.4 });
       const layers = m.getStyle().layers ?? [];
       const firstRoad = layers.find((l) => l.type === 'line' && 'source-layer' in l && l['source-layer'] === 'transportation')?.id;

@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  bearingDeg, buildPointPassesResponse, clampPassHours, cumulativeKm, emptyFeedData, isServiceActiveOn, nextPasses, parseGtfsTime,
+  bearingDeg, buildPointPassesResponse, clampPassHours, cumulativeKm, emptyFeedData, isServiceActiveOn, isTrainRoute, nextPasses, parseGtfsTime,
   parsePointPassRequest, PATH_BACK_KM, predictTrainPositions, shapeSlice, TrainsFeedData, vehicleExtras,
 } from '../src/feeds/trains.js';
 
@@ -162,4 +162,16 @@ test('buildPointPassesResponse: configured, not configured, and no-pass states',
   ]);
   const at = new Date(withPasses.passes[0].at);
   assert.equal(`${String(at.getHours()).padStart(2, '0')}:${String(at.getMinutes()).padStart(2, '0')}`, '09:05');
+});
+
+test('isTrainRoute: route_type decides; without it, TrainLink coach ids ("4T.C.<n>") are not trains', () => {
+  assert.equal(isTrainRoute('4T.C.544'), false);
+  assert.equal(isTrainRoute('4T.T.BMT'), true);
+  assert.equal(isTrainRoute('BMT_1'), true);
+  assert.equal(isTrainRoute(''), true);
+  assert.equal(isTrainRoute('x', '2'), true);
+  assert.equal(isTrainRoute('x', '106'), true);
+  assert.equal(isTrainRoute('x', '204'), false);
+  assert.equal(isTrainRoute('x', '714'), false);
+  assert.equal(isTrainRoute('4T.C.1', '2'), true);
 });

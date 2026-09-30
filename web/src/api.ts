@@ -80,6 +80,8 @@ export interface Photo {
   takenAt: string | null;
   caption: string;
   createdAt: string;
+  focalLength?: number | null;
+  dateTimeOriginal?: string | null;
 }
 
 export interface Settings {
@@ -108,6 +110,22 @@ export interface VersionInfo {
   display: string;
 }
 
+export interface FireIncident {
+  id: string;
+  title: string;
+  category: string;
+  status: string;
+  sizeHa?: number;
+  updated: string;
+  link: string;
+  geometry: GeoJSON.Geometry;
+}
+
+export interface AuroraData {
+  kpNow: number | null;
+  kpMaxNext24h: number | null;
+}
+
 export interface Remote {
   id: string;
   owner_id: string;
@@ -117,9 +135,62 @@ export interface Remote {
   created_at: string;
 }
 
+export type RouteType = 'sprint' | 'circuit';
+
+export interface Route {
+  id: string;
+  ownerId: string;
+  name: string;
+  notes: string;
+  access: string;
+  type: RouteType;
+  /** Ordered [lng, lat] coordinate pairs. */
+  vertices: [number, number][];
+  /** Original click locations used to reconstruct a snapped route. */
+  waypoints?: [number, number][];
+  /** Whether to follow roads between saved waypoints. */
+  snap?: boolean;
+  /** Optional off-route staging location; used as planning anchor if present. */
+  staging: { lat: number; lng: number } | null;
+  visibility: Visibility;
+  createdAt: string;
+  updatedAt: string;
+}
+
 // --- phase 3: feeds ---
 
 export interface Plane { hex: string; flight: string; lat: number; lon: number; track: number | null; gs: number | null; alt_baro: number | null; t: string; seen: number }
+export interface PlaneInfo {
+  type: string | null;
+  manufacturer: string | null;
+  registration: string | null;
+  owner: string | null;
+  airline: string | null;
+  origin: string | null;
+  destination: string | null;
+}
+
+export interface MarineHour {
+  time: string;
+  seaLevelHeightMsl: number | null;
+  waveHeight: number | null;
+  waveDirection: number | null;
+  wavePeriod: number | null;
+  swellWaveHeight: number | null;
+  swellWaveDirection: number | null;
+}
+
+export interface TideExtreme {
+  type: 'high' | 'low';
+  time: string;
+  height: number;
+}
+
+export interface MarineData {
+  coastal: boolean;
+  hourly?: MarineHour[];
+  tides?: TideExtreme[];
+}
 
 export interface RailFeature extends GeoJSON.Feature { properties: { id: string; kind: 'rail' | 'industrial' | 'mine' | 'works'; usage?: string; service?: string; name?: string } }
 
@@ -133,6 +204,20 @@ export interface TrainPosition {
 export interface TrainPass { tripId: string; routeId: string; route: string; headsign: string; at: string }
 export interface TrainsStatus { configured: boolean; lastImport: string | null; tripCount: number }
 
+export interface TrafficCamera {
+  id: string;
+  title: string;
+  view: string;
+  direction: string;
+  region: string;
+  imageUrl: string;
+  point: [number, number];
+}
+export interface CamerasResponse {
+  configured: boolean;
+  cameras: TrafficCamera[];
+}
+
 export interface ScoutEvent {
   group: string; title: string; description: string; startTime: string; endTime: string; venueName: string;
   address: string; locality: string; lat: number; lng: number; imageUrl: string | null; category: string; goodDuring: boolean;
@@ -144,7 +229,38 @@ export interface NearbyResult {
 }
 
 export interface Candidate { id: string; source: string; ref: string; name: string; lat: number; lng: number; tags: Record<string, string>; fetchedAt: string }
-export interface CommonsImage { title: string; pageUrl: string; thumbUrl: string | null; lat: number; lng: number }
+export interface CommonsImage {
+  title: string;
+  pageUrl: string;
+  thumbUrl: string | null;
+  lat: number;
+  lng: number;
+  focal35?: number | null;
+  focalRaw?: number | null;
+  takenAt?: string | null;
+  model?: string | null;
+}
+
+export interface LensBucket {
+  key: string;
+  label: string;
+  count: number;
+  pct: number;
+}
+
+export interface LensStats {
+  total: number;
+  buckets: LensBucket[];
+  hours: number[];
+  peakWindow: string | null;
+  summary: string;
+}
+
+export interface CommonsResponse {
+  images: CommonsImage[];
+  stats: LensStats | null;
+  lenses?: LensStats | null;
+}
 
 export interface TaskStatus {
   name: string; label: string; description: string; enabled: boolean; canDisable: boolean; manualOnly: boolean;
@@ -193,6 +309,7 @@ export interface WeatherHour {
   visibilityM: number | null;
   weatherCode: number | null;
   fogLikely: boolean;
+  aod: number | null;
 }
 export interface WeatherForecast { lat: number; lng: number; fetchedAt: string; hourly: WeatherHour[] }
 
@@ -255,11 +372,11 @@ export const api = {
   spotPhotos: (spotId: string) => fetch(`/api/spots/${spotId}/photos`).then((r) => json<Photo[]>(r)),
   updatePhoto: (id: string, patch: { caption?: string; kind?: Photo['kind'] }) =>
     fetch(`/api/photos/${id}`, { method: 'PATCH', headers: jsonHeaders, body: JSON.stringify(patch) }).then((r) => json<Photo>(r)),
-  uploadPhoto: (spotId: string, photo: Blob, thumb: Blob, meta: { kind?: string; caption?: string; takenAt?: string; w?: number; h?: number } = {}) => {
+  uploadPhoto: (spotId: string, photo: Blob, thumb: Blob, meta: { kind?: string; caption?: string; takenAt?: string; focalLength?: number | null; w?: number; h?: number } = {}) => {
     const form = new FormData();
     form.append('photo', photo);
     form.append('thumb', thumb);
-    for (const [k, v] of Object.entries(meta)) if (v !== undefined) form.append(k, String(v));
+    for (const [k, v] of Object.entries(meta)) if (v !== undefined && v !== null) form.append(k, String(v));
     return fetch(`/api/spots/${spotId}/photos`, { method: 'POST', body: form }).then((r) => json<Photo>(r));
   },
   deletePhoto: (id: string) => fetch(`/api/photos/${id}`, { method: 'DELETE' }).then((r) => json<{ ok: boolean }>(r)),
@@ -286,8 +403,18 @@ export const api = {
 
   // --- weather (Open-Meteo, hourly, UTC) ---
   weather: (lat: number, lng: number, days = 7) => fetch(`/api/weather?lat=${lat}&lng=${lng}&days=${days}`).then((r) => json<WeatherForecast>(r)),
+  // --- marine (Open-Meteo, tides & swell) ---
+  marine: (lat: number, lng: number) => fetch(`/api/marine?lat=${lat}&lng=${lng}`).then((r) => json<MarineData>(r)),
+  // --- fires (NSW RFS) ---
+  fires: () => fetch('/api/fires').then((r) => json<FireIncident[]>(r)),
+  // --- aurora (NOAA space weather) ---
+  aurora: () => fetch('/api/aurora').then((r) => json<AuroraData>(r)),
   // --- planes ---
   planes: (lat: number, lng: number, nm = 40) => fetch(`/api/planes?lat=${lat}&lng=${lng}&nm=${nm}`).then((r) => json<Plane[]>(r)),
+  planeInfo: (hex: string, callsign?: string) => {
+    const qs = callsign ? `?callsign=${encodeURIComponent(callsign)}` : '';
+    return fetch(`/api/planes/${encodeURIComponent(hex)}/info${qs}`).then((r) => json<PlaneInfo>(r));
+  },
   buildings: (lat: number, lng: number, r = 250) => fetch(`/api/buildings?lat=${lat}&lng=${lng}&r=${r}`).then((r) => json<GeoJSON.FeatureCollection>(r)),
 
   // --- rail ---
@@ -299,6 +426,8 @@ export const api = {
   trainPassesAt: (lat: number, lng: number, hours = 6) =>
     fetch(`/api/trains/passes?lat=${lat}&lng=${lng}&hours=${hours}`).then((r) => json<{ configured: boolean; passes: TrainPass[] }>(r)),
   spotTrains: (spotId: string, hours = 6) => fetch(`/api/spots/${spotId}/trains?hours=${hours}`).then((r) => json<{ configured: boolean; passes: TrainPass[] }>(r)),
+  // --- traffic cameras (TfNSW) ---
+  cameras: () => fetch('/api/cameras').then((r) => json<CamerasResponse>(r)),
 
   // --- Event Scout ---
   spotNearby: (spotId: string) => fetch(`/api/spots/${spotId}/nearby`).then((r) => json<NearbyResult>(r)),
@@ -306,8 +435,15 @@ export const api = {
 
   // --- candidates + Commons ---
   candidates: (bbox?: string) => fetch(`/api/candidates${bbox ? `?bbox=${bbox}` : ''}`).then((r) => json<Candidate[]>(r)),
+  roads: (cell: string) => fetch(`/api/roads?cell=${cell}`).then((r) => json<GeoJSON.FeatureCollection>(r)),
   promoteCandidate: (id: string) => fetch(`/api/candidates/${id}/promote`, { method: 'POST' }).then((r) => json<Spot>(r)),
-  spotCommons: (spotId: string) => fetch(`/api/spots/${spotId}/commons`).then((r) => json<CommonsImage[]>(r)),
+  spotCommons: (spotId: string) =>
+    fetch(`/api/spots/${spotId}/commons`)
+      .then((r) => json<CommonsResponse | CommonsImage[]>(r))
+      .then((res) => {
+        if (Array.isArray(res)) return { images: res, stats: null, lenses: null };
+        return res;
+      }),
 
   // --- background tasks ---
   tasks: () => fetch('/api/tasks').then((r) => json<{ tasks: TaskStatus[] }>(r)),
@@ -315,4 +451,13 @@ export const api = {
 
   // --- Event Scout test (TfNSW status is under "trains" above; never the key itself) ---
   testEventScout: (url: string) => fetch(`/api/eventscout/test?url=${encodeURIComponent(url)}`).then((r) => json<{ ok: boolean; message: string }>(r)),
+
+  // --- routes ---
+  routes: () => fetch('/api/routes').then((r) => json<Route[]>(r)),
+  route: (id: string) => fetch(`/api/routes/${id}`).then((r) => json<Route>(r)),
+  createRoute: (route: Partial<Route>) =>
+    fetch('/api/routes', { method: 'POST', headers: jsonHeaders, body: JSON.stringify(route) }).then((r) => json<Route>(r)),
+  updateRoute: (id: string, route: Partial<Route>) =>
+    fetch(`/api/routes/${id}`, { method: 'PATCH', headers: jsonHeaders, body: JSON.stringify(route) }).then((r) => json<Route>(r)),
+  deleteRoute: (id: string) => fetch(`/api/routes/${id}`, { method: 'DELETE' }).then((r) => json<{ ok: boolean }>(r)),
 };

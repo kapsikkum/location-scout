@@ -1,31 +1,38 @@
+import { loadRoads, type RoadsStatus } from '../map/roadQuality';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { GeoJSONSource, LngLatBounds, Map as MlMap, MapMouseEvent, Marker, NavigationControl, Popup, ScaleControl, setWorkerUrl } from 'maplibre-gl';
+import { GeoJSONSource, LngLatBounds, Map as MlMap, MapMouseEvent, Marker, NavigationControl, Point, Popup, ScaleControl, setWorkerUrl } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
-import { api, Candidate, Place, Plane, Spot, TrainPosition, User, type WeatherForecast } from '../api.js';
+import { api, Candidate, FireIncident, Place, Plane, type PlaneInfo, Route, Spot, type TrafficCamera, TrainPosition, User, type WeatherForecast } from '../api.js';
+import { sunLook } from '../map/sunLook.js';
 import { hourAt, pickRadarFrame, RAINVIEWER_INDEX, radarTileUrl, weatherIcon, type RadarIndex } from '../map/weather.js';
 import {
-  CLICKABLE, initFeedLayers, initLayers, PLANE_LAYERS, setImagery, setLayerVisible, setTerrain3d, STYLE_URL, updateCandidates, updateDraft,
+  CLICKABLE, initFeedLayers, initLayers, PLANE_LAYERS, setImagery, setLayerVisible, setTerrain3d, STYLE_URL, updateCandidates, updateDraft, updateRoads, ROADS_MIN_ZOOM,
   updateMood, updatePlacesAndSpots, updatePlanes, updateRail, updateRays, setNearbyHighlight, updateShadows, updateTrains, updateWedges,
-  TRAIN_LAYERS, setTrains3d, updatePlanePositions, hiddenLayers, setRadarFrame,
+  TRAIN_LAYERS, setTrains3d, updatePlanePositions, hiddenLayers, setRadarFrame, FIRE_LAYERS, updateFires, updateCameras,
 } from '../map/layers.js';
 import { due, MotionTracker, planePredict, trainPredict } from '../map/motion.js';
 import { carriageCount } from '../map/trains3d.js';
 import { collectRailTiles, RailSnapper } from '../map/railSnap.js';
 import { goodNow, sunPos } from '../map/sun.js';
-import { Legend } from '../components/Legend.js';
+import { Legend, Swatch } from '../components/Legend.js';
+import { MapMenus } from '../components/MapMenus.js';
 import { NearbyList } from '../components/NearbyList.js';
 import { attachGlance, attachThumbLoader, GLANCE_LAYERS } from '../map/spotGlance.js';
-import { CATEGORIES, groupLayers, loadVisibility, saveVisibility, type Visibility } from '../map/legend.js';
+import { CATEGORIES, category, groupLayers, loadVisibility, saveVisibility, type Visibility } from '../map/legend.js';
 import { applyBaseRailHighlight, effectiveRailOn, restoreBaseRailHighlight, type BaseRailPaintSnapshot } from '../map/baseRailHighlight.js';
 import { buildRailPassPopupHtml, clickableRailLayerIds } from '../map/railPasses.js';
-import { deadReckon } from '../map/planes.js';
+import { deadReckon, formatPlaneDetails } from '../map/planes.js';
 import { useMapTime } from '../time.js';
 import TimeBar from '../components/TimeBar.js';
 import SpotPanel from '../components/SpotPanel.js';
 import SpotEditor, { SpotDraft } from '../components/SpotEditor.js';
 import PlaceEditor, { draftToPlace, PlaceDraft, placeToDraft } from '../components/PlaceEditor.js';
+import RouteEditor, { blankRouteDraft, draftToRoute, RouteDraft, routeToDraft } from '../components/RouteEditor.js';
+import { fetchOsrmFullRoute, routeDistanceKm, routeStops, routingWaypoints } from '../map/routeGeometry.js';
+import { updateRoutes, ROUTE_LINE_LAYER } from '../map/routeLayer.js';
+import { RouteWaypointMarkers, RouteStagingMarker } from '../map/routeWaypointMarkers.js';
 import { emptyGoodTimes } from '../components/GoodTimesEditor.js';
 import DayStrip from '../components/DayStrip.js';
 import SunBearingPlanner from '../components/SunBearingPlanner.js';
@@ -41,8 +48,8 @@ import {
 } from '../map/sunAnchor.js';
 import { insertVertexOnNearestSegment, moveOutlineVertex, PlaceOutlineVertexMarkers } from '../map/placeOutlineEdit.js';
 
-type Selection = { type: 'spot' | 'place' | 'candidate'; id: string } | null;
-type Editing = { type: 'spot'; draft: SpotDraft } | { type: 'place'; draft: PlaceDraft } | null;
+type Selection = { type: 'spot' | 'place' | 'candidate' | 'route'; id: string } | null;
+type Editing = { type: 'spot'; draft: SpotDraft } | { type: 'place'; draft: PlaceDraft } | { type: 'route'; draft: RouteDraft } | null;
 const TRAINS_POLL_MS = 20_000; // matches the server's realtime cache
 /** Follow mode re-centres the camera this often, with a linear ease of the same length so the motion is continuous. */
 const FOLLOW_EASE_MS = 1000;
@@ -64,18 +71,27 @@ const newSpot = (lat: number, lng: number, placeId: string | null = null): SpotD
 });
 
 /** Legend keys whose visibility is applied by their own effect below. */
-const FEED_KEYS = ['imagery', 'planes', 'rail', 'trains', 'candidates', 'weather'];
+const FEED_KEYS = ['imagery', 'planes', 'rail', 'trains', 'candidates', 'road-quality', 'weather', 'fires', 'cameras'];
 const RADAR_POLL_MS = 10 * 60_000;
+
+type RouteHistoryEntry = { draft: RouteDraft; duration: number | null; ready: boolean };
 
 export default function MapPage({ user }: { user: User | null }) {
   const container = useRef<HTMLDivElement>(null);
   const [map, setMap] = useState<MlMap | null>(null);
   const [places, setPlaces] = useState<Place[]>([]);
   const [spots, setSpots] = useState<Spot[]>([]);
+  const [routes, setRoutes] = useState<Route[]>([]);
   const [error, setError] = useState('');
   const [selected, setSelected] = useState<Selection>(null);
   const [editing, setEditing] = useState<Editing>(null);
+  const [stagingMode, setStagingMode] = useState(false);
   const [mode, setMode] = useState<'browse' | 'pick-spot' | 'draw' | 'anchor'>('browse');
+  const [sheetSize, setSheetSize] = useState<'peek' | 'half'>('peek');
+  const editorKey = editing ? `${editing.type}:${(editing.draft as { id?: string }).id ?? 'new'}` : null;
+  const selectedKey = selected ? `${selected.type}:${selected.id}` : null;
+  // Back to peek whenever the sheet's content changes or a map-picking mode starts, so the map stays usable.
+  useEffect(() => { setSheetSize('peek'); }, [editorKey, selectedKey, mode, stagingMode]);
   const [sunAnchor, setSunAnchor] = useState<Coordinate | null>(null);
   const [sunAnchorBearing, setSunAnchorBearing] = useState<number | null>(null);
   const [terrain, setTerrainOn] = useState(false);
@@ -106,13 +122,16 @@ export default function MapPage({ user }: { user: User | null }) {
   const [vis, setVis] = useState<Visibility>(loadVisibility);
   useEffect(() => saveVisibility(vis), [vis]);
   const toggle = (key: string, on = !vis[key]) => setVis((v) => ({ ...v, [key]: on }));
-  const { planes: planesOn, rail: railOn, trains: trainsOn, candidates: candidatesOn, imagery, weather: weatherOn } = vis;
+  const { planes: planesOn, rail: railOn, trains: trainsOn, candidates: candidatesOn, imagery, weather: weatherOn, fires: firesOn, cameras: camerasOn } = vis;
   const railEffectiveOn = effectiveRailOn(railOn, trainsOn);
   const baseRailPaint = useRef<BaseRailPaintSnapshot[] | null>(null);
+  const routesOn = vis.routes;
   const [rail, setRail] = useState<GeoJSON.FeatureCollection | null>(null);
   const [candidates, setCandidates] = useState<Candidate[]>([]);
+  const [fires, setFires] = useState<FireIncident[]>([]);
   const [planeData, setPlaneData] = useState<Plane[]>([]);
   const [trainData, setTrainData] = useState<TrainPosition[]>([]);
+  const [cameraData, setCameraData] = useState<TrafficCamera[]>([]);
 
   // Smooth movement between polls, and follow mode (camera on one vehicle).
   const planeMotion = useRef(new MotionTracker());
@@ -123,19 +142,23 @@ export default function MapPage({ user }: { user: User | null }) {
   const followRef = useRef<Follow | null>(null);
   followRef.current = follow;
   const [followNote, setFollowNote] = useState('');
+  const [roadsStatus, setRoadsStatus] = useState<RoadsStatus | 'zoom'>('');
 
   const canEdit = (ownerId: string) => !!user && (user.role === 'admin' || user.id === ownerId);
 
-  const reload = () => Promise.all([api.places(), api.spots()])
-    .then(([p, s]) => { setPlaces(p); setSpots(s); })
+  const reload = () => Promise.all([api.places(), api.spots(), api.routes()])
+    .then(([p, s, r]) => { setPlaces(p); setSpots(s); setRoutes(r); })
     .catch((err) => setError((err as Error).message));
 
   // --- map lifecycle ---
   useEffect(() => {
-    const m = new MlMap({ container: container.current!, style: STYLE_URL, center: [149.577, -33.419], zoom: 10, maxPitch: 75 });
+    const m = new MlMap({ container: container.current!, style: STYLE_URL, center: [149.577, -33.419], zoom: 10, maxPitch: 70 });
     m.addControl(new NavigationControl({ visualizePitch: true }), 'top-right');
+    m.addControl(homeControl(), 'top-right');
     m.addControl(new ScaleControl({}), 'bottom-left');
     m.once('style.load', () => { initLayers(m); initFeedLayers(m); setMap(m); });
+    // Compact attribution starts expanded (full width on phones); start it as the (i) button instead.
+    m.once('load', () => m.getContainer().querySelector('.maplibregl-compact-show')?.classList.remove('maplibregl-compact-show'));
     const onMove = () => {
       const c = m.getCenter();
       setCentre({ lat: c.lat, lng: c.lng });
@@ -260,6 +283,59 @@ export default function MapPage({ user }: { user: User | null }) {
     return () => { stop = true; };
   }, [map, candidatesOn, view]);
 
+  // Road quality: OSM roads graded by surface, fetched per grid cell from z13 while the layer is on.
+  useEffect(() => {
+    if (!map) return;
+    const on = vis['road-quality'];
+    setLayerVisible(map, ['road-quality'], on);
+    if (!on) return setRoadsStatus('');
+    if (map.getZoom() < ROADS_MIN_ZOOM) return setRoadsStatus('zoom');
+    loadRoads(map, api.roads, setRoadsStatus);
+  }, [map, vis['road-quality'], view]);
+
+  // NSW RFS fire incidents: fetched on mount and polled every 5 min.
+  useEffect(() => {
+    let stop = false;
+    const load = () => api.fires().then((data) => { if (!stop) setFires(data); }).catch(() => {});
+    load();
+    const id = setInterval(load, 5 * 60_000);
+    return () => { stop = true; clearInterval(id); };
+  }, []);
+
+  useEffect(() => {
+    if (!map) return;
+    setLayerVisible(map, FIRE_LAYERS, !!firesOn);
+    if (firesOn) updateFires(map, fires);
+  }, [map, firesOn, fires]);
+
+  // NSW Live Traffic cameras: fetched when the layer is on and polled every 10 min.
+  useEffect(() => {
+    if (!map) return;
+    setLayerVisible(map, ['camera-cones', 'cameras'], !!camerasOn);
+    if (!camerasOn) return;
+    let stop = false;
+    const load = () => {
+      api.cameras().then((res) => {
+        if (stop) return;
+        if (res.cameras) {
+          setCameraData(res.cameras);
+          updateCameras(map, res.cameras);
+        }
+      }).catch((err) => {
+        if (!stop) setError((err as Error).message);
+      });
+    };
+    load();
+    const id = setInterval(load, 10 * 60_000);
+    return () => { stop = true; clearInterval(id); };
+  }, [map, camerasOn]);
+
+  useEffect(() => {
+    if (map && camerasOn && cameraData.length > 0) {
+      updateCameras(map, cameraData);
+    }
+  }, [map, camerasOn, cameraData]);
+
   // Animation: move planes and trains between polls, at most every FRAME_MS, and only for shown layers.
   const trainById = useMemo(() => new Map(trainData.map((t) => [t.tripId, t])), [trainData]);
   const animData = useRef({ planeData, trainData, trainById });
@@ -382,6 +458,204 @@ export default function MapPage({ user }: { user: User | null }) {
   const selectedSpot = selected?.type === 'spot' ? spots.find((s) => s.id === selected.id) : undefined;
   const selectedPlace = selected?.type === 'place' ? places.find((p) => p.id === selected.id) : undefined;
   const selectedCandidate = selected?.type === 'candidate' ? candidates.find((c) => c.id === selected.id) : undefined;
+  const selectedRoute = selected?.type === 'route' ? routes.find((r) => r.id === selected.id) : undefined;
+  const routeDraft = editing?.type === 'route' ? editing.draft : null;
+  const routeDraftRef = useRef<RouteDraft | null>(null);
+  routeDraftRef.current = routeDraft;
+  const routeOriginal = useRef<RouteDraft | null>(null);
+  const routeDraftDirty = useRef(false);
+  const [routeRecovered, setRouteRecovered] = useState(false);
+  const [routeRouting, setRouteRouting] = useState({ busy: false, error: '' });
+  const routeRoutingRef = useRef(routeRouting);
+  routeRoutingRef.current = routeRouting;
+  const [routeDuration, setRouteDuration] = useState<number | null>(null);
+  const routeDurationRef = useRef<number | null>(null);
+  routeDurationRef.current = routeDuration;
+  const routeHistory = useRef<{ undo: RouteHistoryEntry[]; redo: RouteHistoryEntry[] }>({ undo: [], redo: [] });
+  const [, setRouteHistoryVersion] = useState(0);
+  const routeRequest = useRef(0);
+  const routeSession = useRef(0);
+  const draftKey = (id?: string) => `ls.routeDraft.${user?.id ?? 'anon'}.${id ?? 'new'}`;
+
+  /** Forget the stored draft and any in-flight routing for an edit that ended. */
+  function discardRouteDraft(id?: string) {
+    try { localStorage.removeItem(draftKey(id)); } catch { /* storage may be disabled */ }
+    routeDraftDirty.current = false;
+    ++routeSession.current;
+    ++routeRequest.current;
+  }
+
+  function setRouteDraft(draft: RouteDraft) {
+    routeDraftDirty.current = true;
+    routeDraftRef.current = draft;
+    setEditing({ type: 'route', draft });
+  }
+
+  function setRouting(busy: boolean, error = '') {
+    routeRoutingRef.current = { busy, error };
+    setRouteRouting({ busy, error });
+  }
+
+  function setDuration(seconds: number | null) {
+    routeDurationRef.current = seconds;
+    setRouteDuration(seconds);
+  }
+
+  function rememberRoute() {
+    const draft = routeDraftRef.current;
+    if (!draft) return;
+    routeHistory.current.undo.push({ draft, duration: routeDurationRef.current, ready: !routeRoutingRef.current.busy && !routeRoutingRef.current.error });
+    routeHistory.current.redo = [];
+    setRouteHistoryVersion((value) => value + 1);
+  }
+
+  function fitRouteIfOutOfBounds(vertices: [number, number][]) {
+    if (!map || vertices.length < 2) return;
+    const phone = window.innerWidth <= 820;
+    const mapContainer = map.getContainer();
+    const mapW = mapContainer.clientWidth;
+    const mapH = mapContainer.clientHeight;
+    if (mapW <= 0 || mapH <= 0) return;
+
+    const panelEl = (container.current?.parentElement?.querySelector('.panel') ?? document.querySelector('.panel')) as HTMLElement | null;
+    const panelHeight = panelEl ? panelEl.getBoundingClientRect().height : (phone ? mapH * 0.38 : 0);
+    const panelWidth = panelEl ? panelEl.getBoundingClientRect().width : 390;
+
+    const toolsEl = (container.current?.parentElement?.querySelector('.maptools') ?? document.querySelector('.maptools')) as HTMLElement | null;
+    const mapRect = mapContainer.getBoundingClientRect();
+    const toolsBottom = toolsEl ? Math.max(0, toolsEl.getBoundingClientRect().bottom - mapRect.top) : 40;
+
+    const padding = phone
+      ? {
+          top: Math.round(toolsBottom + 16),
+          bottom: Math.round(panelHeight + 24),
+          left: 24,
+          right: 24,
+        }
+      : {
+          top: 24,
+          bottom: 24,
+          left: 24,
+          right: Math.round(panelWidth + 24),
+        };
+
+    const minX = padding.left;
+    const maxX = mapW - padding.right;
+    const minY = padding.top;
+    const maxY = mapH - padding.bottom;
+
+    const isOutside = vertices.some(([lng, lat]) => {
+      const pt = map.project([lng, lat]);
+      return pt.x < minX || pt.x > maxX || pt.y < minY || pt.y > maxY;
+    });
+
+    if (isOutside) {
+      const b = vertices.reduce((acc, c) => acc.extend(c), new LngLatBounds(vertices[0], vertices[0]));
+      map.fitBounds(b, { padding, maxZoom: 16, duration: 500 });
+    }
+  }
+
+  function calculateRoute(draft: RouteDraft) {
+    const request = ++routeRequest.current;
+    const session = routeSession.current;
+    const waypoints = draft.waypoints ?? draft.vertices;
+    if (!draft.snap || waypoints.length < 2) {
+      setRouting(false);
+      setDuration(null);
+      setRouteDraft({ ...draft, vertices: waypoints });
+      if (waypoints.length >= 2) fitRouteIfOutOfBounds(waypoints);
+      return;
+    }
+    setRouting(true);
+    void fetchOsrmFullRoute(routingWaypoints(waypoints, draft.type)).then((result) => {
+      if (request !== routeRequest.current || session !== routeSession.current) return;
+      if (!result) {
+        setRouting(false, 'Could not calculate a road route. Check the stops and retry.');
+        return;
+      }
+      const current = routeDraftRef.current;
+      if (!current) return;
+      setRouteDraft({ ...current, vertices: result.coordinates });
+      setDuration(result.durationSeconds);
+      setRouting(false);
+      fitRouteIfOutOfBounds(result.coordinates);
+    });
+  }
+
+  function changeRouteWaypoints(waypoints: [number, number][]) {
+    const current = routeDraftRef.current;
+    if (!current) return;
+    rememberRoute();
+    const next = { ...current, waypoints, ...(!current.snap ? { vertices: waypoints } : {}) };
+    setRouteDraft(next);
+    calculateRoute(next);
+  }
+
+  function changeRouteDraft(next: RouteDraft) {
+    const current = routeDraftRef.current;
+    if (!current) return;
+    if (next.snap !== current.snap || next.type !== current.type) {
+      rememberRoute();
+      if (!next.snap && !current.snap) {
+        setRouteDraft(next);
+        return;
+      }
+      const changed = { ...next, waypoints: next.waypoints ?? routeStops(current) };
+      setRouteDraft(changed);
+      calculateRoute(changed);
+    } else {
+      setRouteDraft(next);
+    }
+  }
+
+  function travelHistory(direction: 'undo' | 'redo') {
+    const from = routeHistory.current[direction];
+    const entry = from.pop();
+    const current = routeDraftRef.current;
+    if (!entry || !current) return;
+    routeHistory.current[direction === 'undo' ? 'redo' : 'undo'].push({ draft: current, duration: routeDurationRef.current, ready: !routeRoutingRef.current.busy && !routeRoutingRef.current.error });
+    ++routeRequest.current;
+    setRouteDraft(entry.draft);
+    setDuration(entry.duration);
+    setRouting(false);
+    if (!entry.ready) calculateRoute(entry.draft);
+    else if (entry.draft.vertices.length >= 2) fitRouteIfOutOfBounds(entry.draft.vertices);
+    setRouteHistoryVersion((value) => value + 1);
+  }
+
+  function openRouteEdit(draft: RouteDraft) {
+    setStagingMode(false);
+    ++routeSession.current;
+    ++routeRequest.current;
+    routeHistory.current = { undo: [], redo: [] };
+    setRouteHistoryVersion((value) => value + 1);
+    setRouting(false);
+    setDuration(null);
+    routeOriginal.current = draft;
+    routeDraftDirty.current = false;
+    setRouteRecovered(false);
+    try {
+      const saved = JSON.parse(localStorage.getItem(draftKey(draft.id)) ?? 'null') as RouteDraft | null;
+      if (saved && saved.id === draft.id && saved.updatedAt === draft.updatedAt && Array.isArray(saved.vertices) &&
+          (saved.waypoints === undefined || Array.isArray(saved.waypoints))) {
+        draft = saved;
+        routeDraftDirty.current = true;
+        setRouteRecovered(true);
+      }
+    } catch { /* storage may be disabled */ }
+    routeDraftRef.current = draft;
+    setEditing({ type: 'route', draft });
+    if (routeDraftDirty.current && draft.snap && (draft.waypoints?.length ?? 0) >= 2) calculateRoute(draft);
+    setSelected(null);
+    setMode('draw');
+  }
+
+  useEffect(() => {
+    if (!routeDraft || !routeDraftDirty.current) return;
+    try { localStorage.setItem(draftKey(routeDraft.id), JSON.stringify(routeDraft)); } catch { /* storage may be disabled */ }
+  }, [routeDraft]);
+  const cursorState = useRef({ mode, snap: false });
+  cursorState.current = { mode, snap: !!routeDraft?.snap };
   const spotDraft = editing?.type === 'spot' ? editing.draft : null;
 
   const timeKey = Math.floor(time.getTime() / 300_000); // "good" needn't be redone more often than the slider's step
@@ -401,6 +675,14 @@ export default function MapPage({ user }: { user: User | null }) {
   useEffect(() => {
     if (map) updateWedges(map, shownSpots, (s) => goodNow(s, time), highlight);
   }, [view]);
+
+  useEffect(() => {
+    if (!map) return;
+    // The meetup point is a draggable marker while editing, so keep it out of the static layer.
+    const draft = routeDraft ? { ...draftToRoute(routeDraft), staging: null } as Route : null;
+    const shown = draft ? (routeDraft?.id ? routes.map((r) => r.id === routeDraft.id ? draft : r) : [...routes, draft]) : routes;
+    updateRoutes(map, shown, routeDraft?.id ?? selectedRoute?.id ?? null);
+  }, [map, routes, routeDraft, selectedRoute?.id]);
 
   const displayOrigin = resolveDisplayOrigin({
     sunAnchor,
@@ -455,10 +737,14 @@ export default function MapPage({ user }: { user: User | null }) {
   }, [map, weatherOn, radarIdx?.host, radarFrame?.path]);
   const [forecast, setForecast] = useState<WeatherForecast | null>(null);
   useEffect(() => {
-    if (!weatherOn) return;
+    if (!weatherOn && !terrain) return; // the readout needs it, and so does the 3D sky
     const id = setTimeout(() => api.weather(centre.lat, centre.lng).then(setForecast).catch(() => setForecast(null)), 600);
     return () => clearTimeout(id);
-  }, [weatherOn, centre.lat, centre.lng]);
+  }, [weatherOn, terrain, centre.lat, centre.lng]);
+  // 3D sky: blue by day, sunset tints, grey under cloud, rain or fog at the map time.
+  useEffect(() => {
+    if (map) map.setSky(sunLook(sunPos(time, centre.lat, centre.lng), hourAt(forecast, time.getTime())).sky);
+  }, [map, time, centre.lat, centre.lng, forecast]);
   const wxHour = weatherOn ? hourAt(forecast, time.getTime()) : null;
   const wxNight = sunPos(time, centre.lat, centre.lng).altitude < 0;
   // Categories without their own feed effect: apply straight from the legend state.
@@ -466,7 +752,11 @@ export default function MapPage({ user }: { user: User | null }) {
     if (!map) return;
     const groups = groupLayers(map.getStyle().layers ?? []);
     for (const c of CATEGORIES) if (!FEED_KEYS.includes(c.key)) setLayerVisible(map, groups[c.key], vis[c.key]);
-  }, [map, vis]);
+    // Extruded buildings only in 3D; the flat footprints (which building shadows also read) stay either way.
+    setLayerVisible(map, groups.buildings.filter((id) => map.getLayer(id)?.type === 'fill-extrusion'), vis.buildings && terrain);
+    // In 3D terrain mode, hide the 2D hillshade layer to avoid duplicate DEM tile fetching and RTT slope shading
+    setLayerVisible(map, ['hillshade'], vis.terrain && !terrain);
+  }, [map, vis, terrain]);
   useEffect(() => { if (map) setTerrain3d(map, terrain); }, [map, terrain]);
 
   const placeDraft = editing?.type === 'place' ? editing.draft : null;
@@ -492,6 +782,35 @@ export default function MapPage({ user }: { user: User | null }) {
   }, [map, placeDraft, mode]);
   useEffect(() => () => vertexMarkers.current.clear(), [map]);
 
+  const routeWaypointMarkers = useRef(new RouteWaypointMarkers());
+  useEffect(() => {
+    if (!map) return;
+    routeWaypointMarkers.current.update(
+      map,
+      routeDraft ? routeStops(routeDraft) : [],
+      mode === 'draw' && !!routeDraft,
+      (index, at) => {
+        const draft = routeDraftRef.current;
+        if (!draft) return;
+        const stops = routeStops(draft).slice();
+        stops[index] = at;
+        changeRouteWaypoints(stops);
+      },
+    );
+  }, [map, routeDraft, mode]);
+  useEffect(() => () => routeWaypointMarkers.current.clear(), [map]);
+  const routeStagingMarker = useRef(new RouteStagingMarker());
+  const stagingAt = routeDraft?.staging ? [routeDraft.staging.lng, routeDraft.staging.lat] as [number, number] : null;
+  useEffect(() => {
+    routeStagingMarker.current.update(map, stagingAt, ([lng, lat]) => {
+      const draft = routeDraftRef.current;
+      if (!draft) return;
+      rememberRoute();
+      setRouteDraft({ ...draft, staging: { lat, lng } });
+    });
+  }, [map, stagingAt?.[0], stagingAt?.[1]]);
+  useEffect(() => () => routeStagingMarker.current.clear(), [map]);
+
   // --- clicks ---
   const onClick = useRef<(e: MapMouseEvent) => void>(() => {});
   onClick.current = (e) => {
@@ -504,12 +823,39 @@ export default function MapPage({ user }: { user: User | null }) {
       setMode(placement.nextMode ?? 'browse');
       return;
     }
+    if (stagingMode && routeDraftRef.current) {
+      setEditing({ type: 'route', draft: { ...routeDraftRef.current, staging: { lat, lng } } });
+      setStagingMode(false);
+      return;
+    }
     if (mode === 'pick-spot') {
       setMode('browse');
 
       setSelected(null);
       setEditing({ type: 'spot', draft: newSpot(lat, lng) });
       focus(lng, lat);
+      return;
+    }
+    if (mode === 'draw' && routeDraftRef.current) {
+      const draft = routeDraftRef.current, to: [number, number] = [lng, lat];
+      const stops = routeStops(draft);
+
+      // Clicking on the drawn line inserts a stop there. Only when the line is the straight stop-to-stop one (snap off);
+      // a routed road can't be hit-tested per leg, so with snapping a click always appends.
+      const inserted = !draft.snap && stops.length >= 2 && stops.length === draft.vertices.length ? insertVertexOnNearestSegment(stops, 'line', e.point, {
+        project: (at) => map.project(at),
+        unproject: (point) => {
+          const ll = map.unproject([point.x, point.y]);
+          return [ll.lng, ll.lat];
+        },
+        tolerancePx: 12,
+      }) : null;
+
+      if (inserted) {
+        changeRouteWaypoints(inserted.coords);
+        return;
+      }
+      changeRouteWaypoints([...stops, to]);
       return;
     }
     if (mode === 'draw' && placeDraft) {
@@ -540,6 +886,19 @@ export default function MapPage({ user }: { user: User | null }) {
     const hit = map.queryRenderedFeatures(e.point, { layers: CLICKABLE.filter((l) => map.getLayer(l)) })[0];
     if (!hit) return setSelected(null);
     const id = hit.properties?.id as string;
+    if (hit.layer.id === 'cameras') {
+      const coords = (hit.geometry as GeoJSON.Point).coordinates as [number, number];
+      showCameraPopup(map, coords, hit.properties ?? {});
+      return;
+    }
+    if (hit.layer.id === 'road-quality') {
+      showRoadPopup(map, [lng, lat], hit.properties ?? {});
+      return;
+    }
+    if (FIRE_LAYERS.includes(hit.layer.id)) {
+      showFirePopup(map, [lng, lat], hit.properties ?? {});
+      return;
+    }
     if (hit.layer.id === 'clusters') {
       (map.getSource('spots') as GeoJSONSource).getClusterExpansionZoom(hit.properties.cluster_id)
         .then((zoom) => map.easeTo({ center: (hit.geometry as GeoJSON.Point).coordinates as [number, number], zoom }));
@@ -553,6 +912,8 @@ export default function MapPage({ user }: { user: User | null }) {
       setSelected({ type: 'spot', id });
       const [lng, lat] = (hit.geometry as GeoJSON.Point).coordinates;
       focus(lng, lat);
+    } else if (hit.layer.id === ROUTE_LINE_LAYER || hit.layer.id === 'route-staging') {
+      setSelected({ type: 'route', id: hit.properties?.routeId as string });
     } else if (hit.layer.id === 'candidates') {
       setSelected({ type: 'candidate', id });
       const [lng, lat] = (hit.geometry as GeoJSON.Point).coordinates;
@@ -585,9 +946,45 @@ export default function MapPage({ user }: { user: User | null }) {
     if (!map) return;
     const click = (e: MapMouseEvent) => onClick.current(e);
     map.on('click', click);
-    const pointer = (on: boolean) => () => { map.getCanvas().style.cursor = on ? 'pointer' : ''; };
-    for (const l of [...CLICKABLE, 'trains', 'planes']) { map.on('mouseenter', l, pointer(true)); map.on('mouseleave', l, pointer(false)); }
-    return () => { map.off('click', click); };
+    let moveRaf = 0;
+    let pendingPoint: Point | null = null;
+    let roadsCached: string[] | null = null;
+    let clickableCached: string[] | null = null;
+
+    const updateCursor = (point: Point) => {
+      const { mode: m, snap } = cursorState.current;
+      if (m === 'browse') {
+        if (!clickableCached) clickableCached = [...CLICKABLE, 'trains', 'planes'].filter((id) => map.getLayer(id));
+        const hasOver = clickableCached.length > 0 && map.queryRenderedFeatures(point, { layers: clickableCached }).length > 0;
+        map.getCanvas().style.cursor = hasOver ? 'pointer' : '';
+      } else if (m === 'draw' && snap) {
+        if (!roadsCached) roadsCached = (groupLayers(map.getStyle().layers ?? []).roads ?? []).filter((id) => map.getLayer(id));
+        const hasOver = roadsCached.length > 0 && map.queryRenderedFeatures(point, { layers: roadsCached }).length > 0;
+        map.getCanvas().style.cursor = hasOver ? 'pointer' : 'crosshair';
+      } else {
+        map.getCanvas().style.cursor = 'crosshair';
+      }
+    };
+
+    const move = (e: MapMouseEvent) => {
+      if (pointerDown.current) return;
+      pendingPoint = e.point;
+      if (!moveRaf) {
+        moveRaf = requestAnimationFrame(() => {
+          moveRaf = 0;
+          if (pendingPoint) {
+            updateCursor(pendingPoint);
+            pendingPoint = null;
+          }
+        });
+      }
+    };
+    map.on('mousemove', move);
+    return () => {
+      map.off('click', click);
+      map.off('mousemove', move);
+      if (moveRaf) cancelAnimationFrame(moveRaf);
+    };
   }, [map]);
 
   useEffect(() => {
@@ -611,6 +1008,21 @@ export default function MapPage({ user }: { user: User | null }) {
     setMode('browse');
     setEditing(null);
     setSelected({ type: 'place', id: saved.id });
+  }
+
+  async function saveRoute(d: RouteDraft) {
+    if (routeRoutingRef.current.busy || routeRoutingRef.current.error) throw new Error('Wait for the road route or retry it before saving.');
+    const body = draftToRoute(d);
+    const saved = d.id ? await api.updateRoute(d.id, body) : await api.createRoute(body);
+    discardRouteDraft(d.id);
+    await reload(); setEditing(null); setMode('browse'); setSelected({ type: 'route', id: saved.id });
+  }
+
+  async function deleteRoute(r: Route) {
+    if (!confirm(`Delete \"${r.name}\"?`)) return;
+    await api.deleteRoute(r.id);
+    if (routeDraftRef.current?.id === r.id) { discardRouteDraft(r.id); setEditing(null); setMode('browse'); }
+    setSelected(null); await reload();
   }
 
   async function deleteSpot(s: Spot) {
@@ -638,6 +1050,8 @@ export default function MapPage({ user }: { user: User | null }) {
   }
 
   function cancelEdit() {
+    setStagingMode(false);
+    if (routeDraftRef.current) discardRouteDraft(routeDraftRef.current.id);
     setEditing(null);
     setMode('browse');
   }
@@ -648,12 +1062,12 @@ export default function MapPage({ user }: { user: User | null }) {
     setSelected({ type: 'spot', id: spot.id });
   }
 
-  const panelOpen = !!editing || !!selectedSpot || !!selectedPlace || !!selectedCandidate || shouldShowSunPlanner(sunAnchor, null);
+  const panelOpen = !!editing || !!selectedSpot || !!selectedPlace || !!selectedCandidate || !!selectedRoute || shouldShowSunPlanner(sunAnchor, null);
   const placeSpots = selectedPlace ? spots.filter((s) => s.placeId === selectedPlace.id) : [];
   const selectedSunBearing = selectedSpot ? resolveSunPlannerBearing(selectedSpot, sunAnchor, sunAnchorBearing) : null;
 
   return (
-    <div className={`mapshell${panelOpen ? ' mapshell--panel' : ''}`}>
+    <div className={`mapshell${panelOpen ? ' mapshell--panel' : ''}${editing ? ' mapshell--editing' : ''}`}>
       <div ref={container} className="mapshell__map" />
       {error && <div className="maptoast error">{error}</div>}
       {follow && (
@@ -665,13 +1079,16 @@ export default function MapPage({ user }: { user: User | null }) {
         </div>
       )}
       {followNote && !follow && <div className="maptoast">{followNote}</div>}
-      {mode !== 'browse' && (
+      {roadsStatus && <div className={`maptoast${roadsStatus === 'failed' ? ' error' : ''}`} role="status">{{
+        loading: 'Loading roads…', failed: 'Road data unavailable — Overpass busy, retry by moving the map', zoom: 'Zoom in to see road quality',
+      }[roadsStatus]}</div>}
+      {mode !== 'browse' && (mode === 'pick-spot' || mode === 'anchor' || editing?.type !== 'route') && (
         <div className="maptoast">
           {mode === 'pick-spot'
             ? 'Click the map to place the spot'
             : mode === 'anchor'
             ? 'Click the map to place the sun anchor'
-            : 'Click the map to add or edit outline points'}
+            : 'Click the map to add or edit points'}
         </div>
       )}
 
@@ -680,7 +1097,12 @@ export default function MapPage({ user }: { user: User | null }) {
         onHover={(at) => { if (map) setNearbyHighlight(map, at); }}
         following={follow?.id ?? null}
         onFollow={(kind, r) => (follow?.id === r.id ? setFollow(null) : startFollow(kind, r.id))}
-        onPlane={(r) => { if (map) map.flyTo({ center: [r.lng, r.lat], zoom: Math.max(map.getZoom(), 11) }); }}
+        onPlane={(r) => {
+          if (!map) return;
+          map.flyTo({ center: [r.lng, r.lat], zoom: Math.max(map.getZoom(), 11) });
+          const pl = planeData.find((x) => x.hex === r.id);
+          if (pl) showPlanePopup(map, pl, (id) => startFollow('plane', id));
+        }}
         onTrain={(r) => {
           if (!map) return;
           map.flyTo({ center: [r.lng, r.lat], zoom: Math.max(map.getZoom(), 12) });
@@ -689,25 +1111,34 @@ export default function MapPage({ user }: { user: User | null }) {
             (id) => startFollow('train', id));
         }} />
       <div className="maptools">
-        <button className={`chip${goodOnly ? ' active' : ''}`} onClick={() => setGoodOnly(!goodOnly)} title="Only spots whose good times match the map time">Good now</button>
-        <button className={`chip${imagery ? ' active' : ''}`} onClick={() => toggle('imagery')}>Satellite</button>
+        <button className={`chip${imagery ? ' active' : ''}`} onClick={() => toggle('imagery')}><Swatch cat={category('imagery')} />{category('imagery').label}</button>
         <button className={`chip${terrain ? ' active' : ''}`} onClick={() => setTerrainOn(!terrain)}>3D</button>
-        <button className={`chip${planesOn ? ' active' : ''}`} onClick={() => toggle('planes')} title="Live aircraft, dead-reckoned 15 minutes ahead">✈ Planes</button>
-        <button className={`chip${railOn ? ' active' : ''}`} onClick={() => toggle('rail')}>🛤 Rail</button>
-        <button className={`chip${trainsOn ? ' active' : ''}`} onClick={() => toggle('trains')} title="Live passenger train positions, refreshed every 20s (needs a TfNSW key)">🚆 Trains</button>
-        <button className={`chip${weatherOn ? ' active' : ''}`} onClick={() => toggle('weather')} title="Rain radar (RainViewer, recent past only) and the forecast at the map centre for the map time">🌦 Weather</button>
-        <button className={`chip${candidatesOn ? ' active' : ''}`} onClick={() => toggle('candidates')} title="OpenStreetMap viewpoints, ruins and other candidates">📍 Candidates</button>
-        {user && !editing && (
-          <>
-            <button className={`chip${mode === 'pick-spot' ? ' active' : ''}`} onClick={() => setMode(mode === 'pick-spot' ? 'browse' : 'pick-spot')}>+ Spot</button>
-            <button className="chip" onClick={() => { setSelected(null); setEditing({ type: 'spot', draft: newSpot(centre.lat, centre.lng) }); }}>+ Spot here</button>
-            <button className="chip" onClick={() => {
+        <button className={`chip${goodOnly ? ' active' : ''}`} onClick={() => setGoodOnly(!goodOnly)} title="Only spots whose good times match the map time">Good now</button>
+        <MapMenus menus={[
+          { label: 'Live', items: [
+            { key: 'planes', label: category('planes').label, swatch: <Swatch cat={category('planes')} />, on: planesOn, title: 'Live aircraft, dead-reckoned 15 minutes ahead', onSelect: () => toggle('planes') },
+            { key: 'trains', label: category('trains').label, swatch: <Swatch cat={category('trains')} />, on: trainsOn, title: 'Live passenger train positions, refreshed every 20s (needs a TfNSW key)', onSelect: () => toggle('trains') },
+            { key: 'weather', label: category('weather').label, swatch: <Swatch cat={category('weather')} />, on: weatherOn, title: 'Rain radar (RainViewer, recent past only) and the forecast at the map centre for the map time', onSelect: () => toggle('weather') },
+            { key: 'cameras', label: category('cameras').label, swatch: <Swatch cat={category('cameras')} />, on: camerasOn, title: 'NSW live traffic cameras (TfNSW)', onSelect: () => toggle('cameras') },
+            { key: 'fires', label: category('fires').label, swatch: <Swatch cat={category('fires')} />, on: !!vis.fires, onSelect: () => toggle('fires') },
+          ] },
+          { label: 'Scout', items: [
+            { key: 'candidates', label: category('candidates').label, swatch: <Swatch cat={category('candidates')} />, on: candidatesOn, title: 'OpenStreetMap viewpoints, ruins and other candidates', onSelect: () => toggle('candidates') },
+            { key: 'road-quality', label: category('road-quality').label, swatch: <Swatch cat={category('road-quality')} />, on: !!vis['road-quality'], title: 'OpenStreetMap roads from z13: green good, amber fair, red poor/unpaved, grey unknown. Surface tags are incomplete, so grey and fair are often guesses.', onSelect: () => toggle('road-quality') },
+            { key: 'rail', label: category('rail').label, swatch: <Swatch cat={category('rail')} />, on: railOn, onSelect: () => toggle('rail') },
+            { key: 'routes', label: category('routes').label, swatch: <Swatch cat={category('routes')} />, on: routesOn, title: 'Show or hide saved routes', onSelect: () => toggle('routes') },
+          ] },
+          ...(user && !editing ? [{ label: '+ Add', items: [
+            { key: 'spot', label: 'Spot (pick on map)', onSelect: () => setMode(mode === 'pick-spot' ? 'browse' : 'pick-spot') },
+            { key: 'spot-here', label: 'Spot here', onSelect: () => { setSelected(null); setEditing({ type: 'spot', draft: newSpot(centre.lat, centre.lng) }); } },
+            { key: 'route', label: 'Route', onSelect: () => openRouteEdit(blankRouteDraft()) },
+            { key: 'place', label: 'Place', onSelect: () => {
               setSelected(null);
               setEditing({ type: 'place', draft: { name: '', notes: '', access: '', visibility: 'private', lat: centre.lat, lng: centre.lng, kind: 'polygon', coords: [] } });
               setMode('draw');
-            }}>+ Place</button>
-          </>
-        )}
+            } },
+          ] }] : []),
+        ]} />
       </div>
       <div className="sunanchor-controls" role="group" aria-label="Sun anchor controls">
         <button
@@ -732,11 +1163,59 @@ export default function MapPage({ user }: { user: User | null }) {
       </div>
 
       {panelOpen && (
-        <aside className="panel">
+        <aside className={`panel panel--${sheetSize}`}>
+          <button
+            type="button"
+            className="panel__handle"
+            aria-label={sheetSize === 'half' ? 'Collapse panel' : 'Expand panel'}
+            aria-expanded={sheetSize === 'half'}
+            onClick={() => setSheetSize((s) => (s === 'half' ? 'peek' : 'half'))}
+          >
+            <span className="panel__grab" aria-hidden="true" />
+          </button>
           <button className="panel__close" onClick={() => { if (editing) cancelEdit(); else setSelected(null); }} title="Close">✕</button>
           {editing?.type === 'spot' && (
             <SpotEditor key={editing.draft.id ?? 'new'} map={map} draft={editing.draft} places={places}
               onChange={(draft) => setEditing({ type: 'spot', draft })} onSave={() => saveSpot(editing.draft)} onCancel={cancelEdit} />
+          )}
+          {editing?.type === 'route' && (
+            <>
+            {routeRecovered && <div className="hint" role="status">Recovered your unsaved route draft. <button type="button" onClick={() => {
+              try { localStorage.removeItem(draftKey(editing.draft.id)); } catch { /* storage may be disabled */ }
+              ++routeRequest.current;
+              routeHistory.current = { undo: [], redo: [] };
+              setRouteHistoryVersion((value) => value + 1);
+              routeDraftDirty.current = false;
+              setRouteRecovered(false);
+              setRouting(false);
+              setDuration(null);
+              if (routeOriginal.current) {
+                routeDraftRef.current = routeOriginal.current;
+                setEditing({ type: 'route', draft: routeOriginal.current });
+              }
+            }}>Discard draft</button></div>}
+            <RouteEditor
+              draft={editing.draft}
+              drawing={mode === 'draw'}
+              stagingMode={stagingMode}
+              time={time}
+              onDrawing={(on) => { setMode(on ? 'draw' : 'browse'); if (on) setStagingMode(false); }}
+              onStagingMode={setStagingMode}
+              onChange={changeRouteDraft}
+              onWaypointsChange={changeRouteWaypoints}
+              routingBusy={routeRouting.busy}
+              routingError={routeRouting.error}
+              onRetryRouting={() => { const draft = routeDraftRef.current; if (draft) calculateRoute(draft); }}
+              routeDurationSec={routeDuration}
+              onUndo={() => travelHistory('undo')}
+              onRedo={() => travelHistory('redo')}
+              canUndo={routeHistory.current.undo.length > 0}
+              canRedo={routeHistory.current.redo.length > 0}
+              onSave={() => saveRoute(editing.draft)}
+              onCancel={cancelEdit}
+              onDelete={editing.draft.id ? () => void deleteRoute({ ...draftToRoute(editing.draft), id: editing.draft.id, ownerId: '', createdAt: '', updatedAt: '' } as Route) : undefined}
+            />
+            </>
           )}
           {editing?.type === 'place' && (
             <PlaceEditor draft={editing.draft} drawing={mode === 'draw'} onDrawing={(on) => setMode(on ? 'draw' : 'browse')}
@@ -754,7 +1233,7 @@ export default function MapPage({ user }: { user: User | null }) {
           )}
           {!editing && selectedSpot && (
             <>
-              <SpotPanel spot={selectedSpot} place={places.find((p) => p.id === selectedSpot.placeId)} time={time}
+              <SpotPanel spot={selectedSpot} place={places.find((p) => p.id === selectedSpot.placeId)} time={time} fires={fires}
                 canEdit={canEdit(selectedSpot.ownerId)}
                 onEdit={() => { setEditing({ type: 'spot', draft: { ...selectedSpot } }); focus(selectedSpot.lng, selectedSpot.lat); }}
                 onDelete={() => void deleteSpot(selectedSpot)}
@@ -788,6 +1267,17 @@ export default function MapPage({ user }: { user: User | null }) {
                   <button className="primary" onClick={() => setEditing({ type: 'place', draft: placeToDraft(selectedPlace) })}>Edit</button>
                   <button onClick={() => { setSelected(null); setEditing({ type: 'spot', draft: newSpot(selectedPlace.lat, selectedPlace.lng, selectedPlace.id) }); }}>+ Spot in place</button>
                 </>}
+              </div>
+            </>
+          )}
+          {!editing && selectedRoute && (
+            <>
+              <h2>{selectedRoute.name}</h2>
+              <p className="hint">{selectedRoute.type === 'circuit' ? 'Circuit' : 'Sprint'} · {selectedRoute.waypoints ? `${selectedRoute.waypoints.length} stops` : 'Saved path'} · {routeDistanceKm(selectedRoute.vertices, selectedRoute.type).toFixed(1)} km · {selectedRoute.visibility}</p>
+              {selectedRoute.notes && <p className="panel__notes">{selectedRoute.notes}</p>}
+              <div className="panel__actions">
+                <Link to={`/plan?route=${selectedRoute.id}`}><button>Plan shoot</button></Link>
+                {canEdit(selectedRoute.ownerId) && <><button className="primary" onClick={() => openRouteEdit(routeToDraft(selectedRoute))}>Edit</button><button onClick={() => void deleteRoute(selectedRoute)}>Delete</button></>}
               </div>
             </>
           )}
@@ -846,13 +1336,26 @@ function showTrainPopup(map: MlMap, f: GeoJSON.Feature, onFollow?: (id: string) 
   openPopup(map, (f.geometry as GeoJSON.Point).coordinates as [number, number], html, onFollow && p.id ? () => onFollow(p.id!) : undefined);
 }
 
-/** Popup for a clicked plane: callsign, type, altitude and speed, and a Follow button. */
-function showPlanePopup(map: MlMap, p: Plane, onFollow: (hex: string) => void) {
+function buildPlanePopupHtml(p: Plane, info?: PlaneInfo | null): string {
   const alt = p.alt_baro == null ? '' : p.alt_baro <= 0 ? ' · ground' : ` · ${Math.round((p.alt_baro * 0.3048) / 10) * 10} m`;
-  const html = `<strong>${escapeHtml(planeName(p))}</strong>${p.t ? ` <span>${escapeHtml(p.t)}</span>` : ''}<br/>`
+  const details = info ? formatPlaneDetails(info) : null;
+  return `<strong>${escapeHtml(planeName(p))}</strong>${p.t && (!details || !info?.type) ? ` <span>${escapeHtml(p.t)}</span>` : ''}<br/>`
+    + (details ? `<span>${escapeHtml(details)}</span><br/>` : '')
     + `<span>${p.gs != null ? `${Math.round(p.gs * 1.852)} km/h` : 'speed –'}${alt}</span>`
     + '<br/><button class="popup-follow" type="button">Follow</button>';
-  openPopup(map, [p.lon, p.lat], html, () => onFollow(p.hex));
+}
+
+/** Popup for a clicked plane: callsign, enriched info (adsbdb), altitude and speed, and a Follow button. */
+function showPlanePopup(map: MlMap, p: Plane, onFollow: (hex: string) => void) {
+  const popup = openPopup(map, [p.lon, p.lat], buildPlanePopupHtml(p), () => onFollow(p.hex));
+  api.planeInfo(p.hex, p.flight || undefined)
+    .then((info) => {
+      if (trainPopup.current === popup && popup.isOpen()) {
+        popup.setHTML(buildPlanePopupHtml(p, info));
+        popup.getElement()?.querySelector('.popup-follow')?.addEventListener('click', () => { popup.remove(); onFollow(p.hex); });
+      }
+    })
+    .catch(() => {});
 }
 
 function showRailPassPopup(map: MlMap, lat: number, lng: number) {
@@ -864,6 +1367,82 @@ function showRailPassPopup(map: MlMap, lat: number, lng: number) {
     .catch((err) => {
       if (trainPopup.current === popup) popup.setHTML(`<div role="alert"><strong>Passenger trains</strong><br/><span>${escapeHtml((err as Error).message)}</span></div>`);
     });
+}
+
+function showFirePopup(map: MlMap, at: [number, number], p: Record<string, any>) {
+  const title = escapeHtml(String(p.title || 'Fire Incident'));
+  const cat = escapeHtml(String(p.category || ''));
+  const status = escapeHtml(String(p.status || ''));
+  const size = p.sizeHa != null ? ` · ${p.sizeHa} ha` : '';
+  const link = p.link ? `<br/><a href="${escapeHtml(String(p.link))}" target="_blank" rel="noopener noreferrer">RFS incident details</a>` : '';
+  const html = `<strong>${title}</strong>${cat ? ` · <span>${cat}</span>` : ''}<br/>`
+    + (status ? `<span>Status: ${status}${size}</span>` : '')
+    + link;
+  openPopup(map, at, html);
+}
+
+/** Map control: fly back to the instance's home (Settings), read on each click so an edited home applies at once. */
+function homeControl() {
+  const el = document.createElement('div');
+  el.className = 'maplibregl-ctrl maplibregl-ctrl-group';
+  el.innerHTML = `<button type="button" title="Home" aria-label="Fly to home"><svg viewBox="0 0 24 24" width="18" height="18" style="margin:auto;display:block" fill="none" stroke="#333" stroke-width="2" stroke-linejoin="round"><path d="M3 11 12 4l9 7"/><path d="M5 10v10h5v-6h4v6h5V10"/></svg></button>`;
+  return {
+    onAdd(map: MlMap) {
+      el.querySelector('button')!.onclick = () => {
+        api.settings().then((s) => map.flyTo({ center: [s.home.lng, s.home.lat], zoom: 10, bearing: 0, pitch: 0 })).catch(() => {});
+      };
+      return el;
+    },
+    onRemove() { el.remove(); },
+  };
+}
+
+function showRoadPopup(map: MlMap, at: [number, number], p: Record<string, any>) {
+  const e = (v: unknown) => escapeHtml(String(v));
+  // GeoJSON feature properties round-trip nulls as the string "null" from queryRenderedFeatures
+  const has = (v: unknown) => v != null && v !== '' && v !== 'null';
+  const rows = [['Surface', p.surface], ['Smoothness', p.smoothness], ['Speed', has(p.maxspeed) ? `${p.maxspeed} km/h` : ''], ['Lanes', has(p.lanes) ? p.lanes : '']]
+    .filter(([, v]) => v).map(([k, v]) => `${k}: ${e(v)}`);
+  openPopup(map, at, `<strong>${e(p.name || p.highway || 'Road')}</strong> · <span>${e(p.grade)}</span>${rows.length ? `<br/><span>${rows.join(' · ')}</span>` : ''}`);
+}
+
+function showCameraPopup(map: MlMap, at: [number, number], p: Record<string, any>) {
+  const id = String(p.id ?? '');
+  const title = escapeHtml(String(p.title || 'Traffic camera'));
+  const direction = p.direction ? escapeHtml(String(p.direction)) : '';
+  const view = p.view ? escapeHtml(String(p.view)) : '';
+  const rawUrl = String(p.imageUrl || '');
+  const t = Date.now();
+  const directUrl = rawUrl ? (rawUrl.includes('?') ? `${rawUrl}&t=${t}` : `${rawUrl}?t=${t}`) : '';
+  const proxyUrl = id ? `/api/cameras/${encodeURIComponent(id)}/image?t=${t}` : '';
+  const imgUrl = directUrl || proxyUrl;
+  const fallbackAttr = proxyUrl && directUrl ? ` onerror="if(this.src!=='${escapeHtml(proxyUrl)}'){this.src='${escapeHtml(proxyUrl)}';}"` : '';
+
+  const html = `<div class="camera-popup">`
+    + (imgUrl ? `<div style="margin-bottom:6px;"><img src="${escapeHtml(imgUrl)}"${fallbackAttr} alt="${title}" title="Click to enlarge" style="width:100%;max-width:320px;height:auto;border-radius:4px;display:block;background:#171a21;cursor:zoom-in;" loading="lazy" /></div>` : '')
+    + `<strong>${title}</strong>`
+    + (direction ? ` <span>(${direction})</span>` : '')
+    + (view && view !== title ? `<br/><span style="font-size:11px;color:#8a93a6;">${view}</span>` : '')
+    + `</div>`;
+  const popup = openPopup(map, at, html);
+  const img = popup.getElement()?.querySelector<HTMLImageElement>('.camera-popup img');
+  img?.addEventListener('click', () => openCameraLightbox(img.currentSrc || img.src, img.alt));
+}
+
+/** Full-screen view of a camera frame, reusing the photo lightbox styles. Click, ✕ or Escape closes. */
+function openCameraLightbox(src: string, caption: string) {
+  const box = document.createElement('div');
+  box.className = 'lightbox';
+  box.setAttribute('role', 'dialog');
+  box.setAttribute('aria-label', caption);
+  box.innerHTML = `<img src="${escapeHtml(src)}" alt="${escapeHtml(caption)}" /><div class="lightbox__caption">${escapeHtml(caption)}</div>`
+    + `<button type="button" class="lightbox__close" aria-label="Close">✕</button>`;
+  const close = () => { box.remove(); window.removeEventListener('keydown', onKey); };
+  const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') close(); };
+  box.addEventListener('click', close);
+  window.addEventListener('keydown', onKey);
+  document.body.appendChild(box);
+  box.querySelector('button')?.focus();
 }
 
 function openPopup(map: MlMap, at: [number, number], html: string, onFollow?: () => void) {

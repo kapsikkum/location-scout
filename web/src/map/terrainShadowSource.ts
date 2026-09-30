@@ -8,7 +8,7 @@ import type { ShadowRequest } from './terrainShadow.worker.js';
 import { tileRings } from './terrainShadow.js';
 
 export const TERRAIN_SHADOW_MAX_DEM_Z = 12; // DEM sampled at <= z12; tiles above cut the terrain mask from z12
-export const SHADOW_RASTER_MAX_Z = 18; // building shadows rasterised up to here; MapLibre overzooms above
+export const SHADOW_RASTER_MAX_Z = 16; // building shadows rasterised up to here; MapLibre overzooms above
 let buildings: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features: [] };
 let buildingsVer = 0;
 let color: [number, number, number] = [10, 12, 26];

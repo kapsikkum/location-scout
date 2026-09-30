@@ -1,7 +1,9 @@
 /** MapLibre sources and layers: base extras (imagery, DEM), light (mood, rays, shadows) and our places/spots. */
 import { GeoJSONSource, Map as MlMap, type RasterTileSource, type LightSpecification } from 'maplibre-gl';
-import type { Place, Spot } from '../api.js';
-import { ICON, thumbIconId } from './spotGlance.js';
+import type { FireIncident, Place, Spot, TrafficCamera } from '../api.js';
+import { cameraBearing, ICON, thumbIconId } from './spotGlance.js';
+import { RAIL_COLOR } from './legend.js';
+import { useOvertureBuildings } from './overture.js';
 import { destination, wedge } from './geo.js';
 import { buildingShadows, MIN_SHADOW_ALT, type Footprint } from './shadows.js';
 import type { ShadowJob } from './shadows.worker.js';
@@ -14,10 +16,12 @@ import { registerTerrainShadowProtocol, setBuildingShadows, setTerrainShadowSun,
 import { RADAR_MAX_NATIVE_Z } from './weather.js';
 import { moodAt, moonPos, sunPos, sunriseSunset } from './sun.js';
 import { SELECTED_BEARING_PROJECTION_SOURCE } from './sunAnchor.js';
+import { initRouteLayers } from './routeLayer.js';
 
 export const STYLE_URL = 'https://tiles.openfreemap.org/styles/liberty';
 export const ESRI = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}';
 export const TERRARIUM = 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png';
+export const NIGHT_LIGHTS = 'https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/VIIRS_Black_Marble/default/2016-01-01/GoogleMapsCompatible_Level8/{z}/{y}/{x}.png';
 const FONT = ['Noto Sans Regular'];
 
 export const CHILD_SPOT_ZOOM = 13;
@@ -38,10 +42,12 @@ export function buildingLayerIds(map: MlMap): string[] {
   return styleLayers(map).filter((l) => 'source-layer' in l && l['source-layer'] === 'building').map((l) => l.id);
 }
 
-export const DEM_SOURCE = { type: 'raster-dem' as const, tiles: [TERRARIUM], tileSize: 256, maxzoom: 15, encoding: 'terrarium' as const,
+export const DEM_SOURCE = { type: 'raster-dem' as const, tiles: [TERRARIUM], tileSize: 256, maxzoom: 14, encoding: 'terrarium' as const,
   attribution: 'Terrain: <a href="https://registry.opendata.aws/terrain-tiles/">AWS Terrain Tiles</a>' };
 
 export function initLayers(map: MlMap) {
+  try { map.setSourceTileLodParams(4.0, 1.8); } catch { /* ignore */ }
+  useOvertureBuildings(map);
   const layers = styleLayers(map);
   const firstSymbol = layers.find((l) => l.type === 'symbol')?.id;
   const firstRoad = layers.find((l) => l.type === 'line' && 'source-layer' in l && l['source-layer'] === 'transportation')?.id ?? firstSymbol;
@@ -49,6 +55,9 @@ export function initLayers(map: MlMap) {
 
   map.addSource('imagery', { type: 'raster', tiles: [ESRI], tileSize: 256, maxzoom: 17, attribution: 'Imagery © Esri' });
   map.addLayer({ id: 'imagery', type: 'raster', source: 'imagery', layout: { visibility: 'none' } }, firstRoad);
+
+  map.addSource('night-lights', { type: 'raster', tiles: [NIGHT_LIGHTS], tileSize: 256, maxzoom: 8, attribution: 'Night lights © NASA GIBS' });
+  map.addLayer({ id: 'night-lights', type: 'raster', source: 'night-lights', layout: { visibility: 'none' }, paint: { 'raster-opacity': 0 } }, firstRoad);
 
   map.addSource('dem', DEM_SOURCE);
   map.addSource('terrain', DEM_SOURCE); // a second source for 3D terrain, as MapLibre recommends
@@ -104,6 +113,9 @@ export function initLayers(map: MlMap) {
   map.addLayer({ id: 'draft-line', type: 'line', source: 'draft', filter: ['!=', ['geometry-type'], 'Point'], paint: { 'line-color': '#4ade80', 'line-width': 2, 'line-dasharray': [2, 1] } });
   map.addLayer({ id: 'draft-pts', type: 'circle', source: 'draft', filter: ['==', ['geometry-type'], 'Point'],
     paint: { 'circle-radius': 5, 'circle-color': '#4ade80', 'circle-stroke-color': '#0e1014', 'circle-stroke-width': 2 } });
+
+  // Persisted route overlays live above the base style and below map labels.
+  initRouteLayers(map, firstSymbol);
 
   map.addSource('place-points', { type: 'geojson', data: empty() });
   map.addLayer({ id: 'place-points', type: 'circle', source: 'place-points', maxzoom: CHILD_SPOT_ZOOM,
@@ -166,7 +178,7 @@ export function initFeedLayers(map: MlMap) {
   map.addLayer({
     id: 'rail-lines', type: 'line', source: 'rail', filter: ['==', ['geometry-type'], 'LineString'], layout: { visibility: 'none' },
     paint: {
-      'line-color': ['match', ['get', 'usage'], 'main', '#4cc3ff', 'branch', '#7fd8a0', ['match', ['get', 'service'], 'siding', '#c98a3a', 'yard', '#c98a3a', '#8a93a6']],
+      'line-color': ['match', ['get', 'usage'], 'main', RAIL_COLOR, 'branch', '#7fd8a0', ['match', ['get', 'service'], 'siding', '#c98a3a', 'yard', '#c98a3a', '#8a93a6']],
       'line-width': ['match', ['get', 'usage'], 'main', 2.5, 1.5],
     },
   });
@@ -222,7 +234,7 @@ export function initFeedLayers(map: MlMap) {
   map.on('pitch', () => applyTrainPitch(map));
   map.on('zoom', () => applyTrainPitch(map));
   // Terrain arriving lets trains that were waiting on it go 3D.
-  map.on('sourcedata', (e) => { if (e.sourceId === 'terrain' && e.isSourceLoaded) map.triggerRepaint(); });
+  map.on('sourcedata', (e) => { if (!hiddenLayers.has('trains') && e.sourceId === 'terrain' && e.isSourceLoaded) map.triggerRepaint(); });
   applyTrainPitch(map);
 
   // Nearby list hover: a ring around the hovered plane or train.
@@ -235,6 +247,49 @@ export function initFeedLayers(map: MlMap) {
   map.addSource('candidates', { type: 'geojson', data: empty() });
   map.addLayer({ id: 'candidates', type: 'circle', source: 'candidates', layout: { visibility: 'none' },
     paint: { 'circle-radius': 6, 'circle-color': '#6b7280', 'circle-opacity': 0.55, 'circle-stroke-color': '#e9ecf3', 'circle-stroke-width': 1, 'circle-stroke-opacity': 0.6 } });
+
+  // OSM road quality: graded by surface/smoothness, under labels; unknown is thin and faint.
+  const grade = (good: string | number, fair: string | number, poor: string | number, unknown: string | number) => ['match', ['get', 'grade'], 'good', good, 'fair', fair, 'poor', poor, unknown] as any;
+  map.addSource('road-quality', { type: 'geojson', data: empty(), attribution: 'Roads © OpenStreetMap contributors' });
+  map.addLayer({ id: 'road-quality', type: 'line', source: 'road-quality', minzoom: ROADS_MIN_ZOOM, layout: { visibility: 'none', 'line-cap': 'round', 'line-join': 'round' }, paint: {
+    'line-color': grade('#22c55e', '#f59e0b', '#ef4444', '#9ca3af'),
+    // zoom must be the top-level interpolate input; the per-grade factor goes inside each stop.
+    'line-width': ['interpolate', ['linear'], ['zoom'], ROADS_MIN_ZOOM, ['*', 3, grade(1, 1, 1, 0.5)], 18, ['*', 7, grade(1, 1, 1, 0.5)]] as any,
+    'line-opacity': grade(0.85, 0.85, 0.85, 0.5),
+  } }, styleLayers(map).find((l) => l.type === 'symbol')?.id);
+
+  // NSW RFS fire incidents: points coloured by alert level + polygons outlined
+  const FIRE_COLOR = ['match', ['get', 'category'], 'Emergency Warning', '#ef4444', 'Emergency', '#ef4444', 'Watch and Act', '#f97316', 'Advice', '#eab308', '#9ca3af'] as any;
+  map.addSource('fires', { type: 'geojson', data: empty(), attribution: '© NSW RFS' });
+  map.addLayer({
+    id: 'fires-polys-fill', type: 'fill', source: 'fires',
+    filter: ['any', ['==', ['geometry-type'], 'Polygon'], ['==', ['geometry-type'], 'MultiPolygon']],
+    layout: { visibility: 'none' },
+    paint: { 'fill-color': FIRE_COLOR, 'fill-opacity': 0.15 },
+  });
+  map.addLayer({
+    id: 'fires-polys-line', type: 'line', source: 'fires',
+    filter: ['any', ['==', ['geometry-type'], 'Polygon'], ['==', ['geometry-type'], 'MultiPolygon']],
+    layout: { visibility: 'none' },
+    paint: { 'line-color': FIRE_COLOR, 'line-width': 2 },
+  });
+  map.addLayer({
+    id: 'fires-pts', type: 'circle', source: 'fires',
+    filter: ['==', ['geometry-type'], 'Point'],
+    layout: { visibility: 'none' },
+    paint: { 'circle-radius': 6, 'circle-color': FIRE_COLOR, 'circle-stroke-color': '#0e1014', 'circle-stroke-width': 1.5 },
+  });
+
+  // NSW Live Traffic cameras: a camera glyph (places are plain dots) with a cone the way it looks.
+  // The cone is a screen-sized icon rotated to the bearing, so it stays small at any zoom.
+  if (!map.hasImage('camera')) map.addImage('camera', cameraIcon(), { pixelRatio: 2 });
+  if (!map.hasImage('camera-cone')) map.addImage('camera-cone', cameraConeIcon(), { pixelRatio: 2 });
+  map.addSource('cameras', { type: 'geojson', data: empty(), attribution: '© Transport for NSW' });
+  map.addLayer({ id: 'camera-cones', type: 'symbol', source: 'cameras', filter: ['has', 'bearing'],
+    layout: { visibility: 'none', 'icon-image': 'camera-cone', 'icon-rotate': ['get', 'bearing'], 'icon-rotation-alignment': 'map',
+      'icon-allow-overlap': true, 'icon-ignore-placement': true } });
+  map.addLayer({ id: 'cameras', type: 'symbol', source: 'cameras',
+    layout: { visibility: 'none', 'icon-image': 'camera', 'icon-allow-overlap': true, 'icon-ignore-placement': true } });
 }
 
 /** Layers the user has switched off (legend/chips); code that toggles visibility itself must respect this. */
@@ -340,7 +395,119 @@ export function updateCandidates(map: MlMap, candidates: { id: string; name: str
   })) });
 }
 
-export const CLICKABLE = ['spot-thumbs', 'place-spot-thumbs', 'spot-points', 'place-spots', 'clusters', 'place-points', 'place-fill', 'place-line', 'candidates'];
+export const ROADS_MIN_ZOOM = 13;
+
+export function updateRoads(map: MlMap, roads: GeoJSON.FeatureCollection) {
+  setData(map, 'road-quality', roads);
+}
+
+export const FIRE_LAYERS = ['fires-polys-fill', 'fires-polys-line', 'fires-pts'];
+
+export function extractFireGeometries(geom: GeoJSON.Geometry): { point: GeoJSON.Point | null; polygons: (GeoJSON.Polygon | GeoJSON.MultiPolygon)[] } {
+  let point: GeoJSON.Point | null = null;
+  const polygons: (GeoJSON.Polygon | GeoJSON.MultiPolygon)[] = [];
+  function walk(g: GeoJSON.Geometry) {
+    if (g.type === 'Point' && !point) point = g;
+    else if (g.type === 'Polygon' || g.type === 'MultiPolygon') polygons.push(g);
+    else if (g.type === 'GeometryCollection') g.geometries.forEach(walk);
+  }
+  walk(geom);
+  return { point, polygons };
+}
+
+export function firesGeoJSON(incidents: FireIncident[]): GeoJSON.FeatureCollection {
+  const features: GeoJSON.Feature[] = [];
+  for (const inc of incidents) {
+    const p = {
+      id: inc.id,
+      title: inc.title,
+      category: inc.category,
+      status: inc.status,
+      sizeHa: inc.sizeHa,
+      updated: inc.updated,
+      link: inc.link,
+    };
+    const { point, polygons } = extractFireGeometries(inc.geometry);
+    if (point) {
+      features.push({
+        type: 'Feature',
+        id: `${inc.id}-pt`,
+        properties: p,
+        geometry: point,
+      });
+    }
+    polygons.forEach((poly, i) => {
+      features.push({
+        type: 'Feature',
+        id: `${inc.id}-poly-${i}`,
+        properties: p,
+        geometry: poly,
+      });
+    });
+  }
+  return { type: 'FeatureCollection', features };
+}
+
+export function updateFires(map: MlMap, fires: FireIncident[]) {
+  setData(map, 'fires', firesGeoJSON(fires));
+}
+
+export function camerasGeoJSON(cameras: TrafficCamera[]): GeoJSON.FeatureCollection {
+  return {
+    type: 'FeatureCollection',
+    features: cameras.map((c) => ({
+      type: 'Feature',
+      id: c.id,
+      properties: {
+        id: c.id,
+        title: c.title,
+        view: c.view,
+        direction: c.direction,
+        ...(bearingOf(c) != null ? { bearing: bearingOf(c) } : {}),
+        region: c.region,
+        imageUrl: c.imageUrl,
+      },
+      geometry: {
+        type: 'Point',
+        coordinates: c.point,
+      },
+    })),
+  };
+}
+
+const bearingOf = (c: TrafficCamera) => cameraBearing(c.direction ?? '', c.view ?? '');
+
+export function updateCameras(map: MlMap, cameras: TrafficCamera[]) {
+  setData(map, 'cameras', camerasGeoJSON(cameras));
+}
+
+/** A 60° wedge pointing up from the image centre (the camera), fading out over 32 px; drawn at 2x. */
+function cameraConeIcon(): ImageData {
+  const c = document.createElement('canvas');
+  c.width = c.height = 128;
+  const g = c.getContext('2d')!;
+  const fade = g.createRadialGradient(64, 64, 0, 64, 64, 64);
+  fade.addColorStop(0, 'rgba(56,189,248,0.55)');
+  fade.addColorStop(1, 'rgba(56,189,248,0)');
+  g.fillStyle = fade;
+  g.beginPath(); g.moveTo(64, 64); g.arc(64, 64, 64, -Math.PI / 2 - Math.PI / 6, -Math.PI / 2 + Math.PI / 6); g.closePath(); g.fill();
+  return g.getImageData(0, 0, 128, 128);
+}
+
+/** Sky-blue camera on a dark disc, drawn at 2x. */
+function cameraIcon(): ImageData {
+  const c = document.createElement('canvas');
+  c.width = c.height = 44;
+  const g = c.getContext('2d')!;
+  const disc = (r: number, y = 22) => { g.beginPath(); g.arc(22, y, r, 0, Math.PI * 2); g.fill(); };
+  g.fillStyle = '#0e1014'; disc(21);
+  g.fillStyle = '#38bdf8'; g.beginPath(); g.roundRect(9, 15, 26, 17, 3); g.fill(); g.fillRect(16, 11, 10, 5);
+  g.fillStyle = '#0e1014'; disc(5.5, 23.5);
+  g.fillStyle = '#38bdf8'; disc(3, 23.5);
+  return g.getImageData(0, 0, 44, 44);
+}
+
+export const CLICKABLE = ['spot-thumbs', 'place-spot-thumbs', 'spot-points', 'place-spots', 'clusters', 'place-points', 'place-fill', 'place-line', 'candidates', 'fires-pts', 'fires-polys-fill', 'fires-polys-line', 'cameras', 'road-quality', 'route-lines', 'route-staging'];
 
 export function setImagery(map: MlMap, on: boolean) {
   map.setLayoutProperty('imagery', 'visibility', on ? 'visible' : 'none');
@@ -349,6 +516,31 @@ export function setImagery(map: MlMap, on: boolean) {
 export function setTerrain3d(map: MlMap, on: boolean) {
   map.setTerrain(on ? { source: 'terrain', exaggeration: 1.4 } : null);
   map.easeTo({ pitch: on ? 60 : 0, duration: 600 });
+  if (on) {
+    try {
+      // Cheaper terrain mesh/textures; pokes MapLibre internals, so a version bump must not throw.
+      const t = (map as any).terrain;
+      if (t) {
+        t.meshSize = 64;
+        t.qualityFactor = 1;
+        const p = (map as any).painter;
+        if (p?.renderToTexture) {
+          p.renderToTexture.rttSize = t.tileManager.tileSize * t.qualityFactor;
+        }
+      }
+    } catch {
+      // internals changed; keep MapLibre defaults
+    }
+  }
+  try {
+    if (on) {
+      map.setSourceTileLodParams(4.0, 1.8);
+    } else {
+      map.setSourceTileLodParams(9.314, 3.0);
+    }
+  } catch {
+    // Style tile managers might still be initializing
+  }
 }
 
 /** Hillshade light from the sun, and a tint that follows its altitude. */
@@ -360,6 +552,7 @@ function paint(map: MlMap, layer: string, prop: Parameters<MlMap["setPaintProper
 }
 
 const lastLight = new WeakMap<MlMap, string>();
+const lastBuildingShade = new WeakMap<MlMap, string>();
 export function updateMood(map: MlMap, sun: { azimuth: number; altitude: number }) {
   const up = sun.altitude > 0;
   paint(map, 'hillshade', 'hillshade-illumination-direction', sun.azimuth);
@@ -371,6 +564,8 @@ export function updateMood(map: MlMap, sun: { azimuth: number; altitude: number 
   paint(map, 'mood', 'fill-color', mood.color);
   paint(map, 'mood', 'fill-opacity', mood.opacity);
   paint(map, 'imagery', 'raster-brightness-max', Math.max(0.35, 1 - mood.opacity * 0.9));
+  // Night lights only mean something after dark: none while the sun is up, full from the end of civil twilight (-6°).
+  paint(map, 'night-lights', 'raster-opacity', 0.7 * Math.min(1, Math.max(0, -sun.altitude / 6)));
   // 3D buildings: lit from the sun's direction, warm near the horizon, dim and flat at night.
   const light: LightSpecification = {
     anchor: 'map',
@@ -381,8 +576,11 @@ export function updateMood(map: MlMap, sun: { azimuth: number; altitude: number 
   const lk = JSON.stringify(light);
   if (lastLight.get(map) !== lk) { lastLight.set(map, lk); map.setLight(light); }
   const shade = up ? (sun.altitude < 8 ? '#cbbfb3' : '#d9d6d0') : '#2a2e3d';
-  for (const id of buildingLayerIds(map)) {
-    if (map.getLayer(id)?.type === 'fill-extrusion') paint(map, id, 'fill-extrusion-color', shade);
+  if (lastBuildingShade.get(map) !== shade) {
+    lastBuildingShade.set(map, shade);
+    for (const id of buildingLayerIds(map)) {
+      if (map.getLayer(id)?.type === 'fill-extrusion') paint(map, id, 'fill-extrusion-color', shade);
+    }
   }
 }
 
@@ -417,15 +615,20 @@ export function updateShadows(map: MlMap, sun: { azimuth: number; altitude: numb
     setBuildingShadows(map, null);
     return setData(map, 'shadows', empty());
   }
-  const layers = buildingLayerIds(map).filter((id) => map.getLayer(id));
-  if (!layers.length) return;
+  const allLayers = buildingLayerIds(map).filter((id) => map.getLayer(id));
+  if (!allLayers.length) return;
+  // Query flat 2D fill layers when available rather than heavy 3D extruded prism geometries
+  const flatLayers = allLayers.filter((id) => map.getLayer(id)?.type === 'fill');
+  const layers = flatLayers.length ? flatLayers : allLayers;
   const seen = new Set<string>();
   const features: Footprint[] = [];
   for (const f of map.queryRenderedFeatures({ layers })) {
-    const key = `${f.id}:${JSON.stringify((f.geometry as GeoJSON.Polygon).coordinates?.[0]?.[0])}`;
+    const coords = (f.geometry as GeoJSON.Polygon).coordinates?.[0]?.[0];
+    const key = `${f.id}:${coords ? `${coords[0]},${coords[1]}` : ''}`;
     if (seen.has(key)) continue;
     seen.add(key);
     features.push({ geometry: f.geometry, properties: f.properties });
+    if (features.length >= 1000) break;
   }
   // Nothing changed (same buildings, sun within 0.1°): skip the polygon work entirely.
   const key = `${sun.azimuth.toFixed(1)}|${sun.altitude.toFixed(1)}|${[...seen].sort().join(',')}`;

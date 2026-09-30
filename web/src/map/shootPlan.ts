@@ -74,3 +74,54 @@ export function buildingShadeAt(features: Footprint[], lng: number, lat: number)
   }
   return (az, alt) => blds.some((b) => inRing(shadowPolygon(b.ring, b.h, az, alt), lng, lat));
 }
+
+export interface SunLeavesResult {
+  leaves: Date | null;
+  returns: Date | null;
+  horizonAlt: number | null;
+  obstacle?: 'terrain' | 'buildings' | null;
+  returnsObstacle?: 'terrain' | 'buildings' | null;
+}
+
+/**
+ * The last daytime transition from 'sun' to 'shade' (leaves) and first morning transition from 'shade' to 'sun' (returns).
+ * `horizonAlt` is the sun altitude at the moment of departure (the apparent ridge height).
+ */
+export function sunLeavesAt(steps: Step[]): SunLeavesResult {
+  let returns: Date | null = null;
+  let returnsObstacle: 'terrain' | 'buildings' | null = null;
+  let leaves: Date | null = null;
+  let horizonAlt: number | null = null;
+  let obstacle: 'terrain' | 'buildings' | null = null;
+
+  let hadSun = false;
+  for (let i = 1; i < steps.length; i++) {
+    const prev = steps[i - 1];
+    const curr = steps[i];
+    if (prev.light === 'sun') {
+      hadSun = true;
+    }
+    if (!hadSun && prev.light === 'shade' && curr.light === 'sun') {
+      returns = curr.t;
+      returnsObstacle = prev.buildings ? 'buildings' : 'terrain';
+      break;
+    }
+  }
+
+  for (let i = steps.length - 1; i >= 1; i--) {
+    const prev = steps[i - 1];
+    const curr = steps[i];
+    if (curr.light === 'sun') {
+      break;
+    }
+    if (prev.light === 'sun' && curr.light === 'shade' && curr.altitude > 0) {
+      leaves = curr.t;
+      horizonAlt = Math.round(curr.altitude * 10) / 10;
+      obstacle = curr.buildings ? 'buildings' : 'terrain';
+      break;
+    }
+  }
+
+  return { leaves, returns, horizonAlt, obstacle, returnsObstacle };
+}
+

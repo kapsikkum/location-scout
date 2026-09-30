@@ -80,7 +80,7 @@ export default function Photos({ spot, canEdit, onMoveSpot, onCreateSpotAt }: {
         setBusy(`Uploading ${n + 1}/${pending.length}…`);
         const prepared = await prepareUpload(p.file);
         await api.uploadPhoto(to.id, prepared.photo, prepared.thumb, {
-          kind: p.kind, caption: p.caption, takenAt: p.meta.takenAt?.toISOString(), w: prepared.w, h: prepared.h,
+          kind: p.kind, caption: p.caption, takenAt: p.meta.takenAt?.toISOString(), focalLength: p.meta.focalLength, w: prepared.w, h: prepared.h,
         });
       }
       clearPending();

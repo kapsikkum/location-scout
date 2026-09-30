@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Spot } from '../src/api.js';
-import { compass, escapeHtml, excerpt, glanceHtml, glanceOffset, goodStatus, thumbIconId, THUMB_PREFIX } from '../src/map/spotGlance.js';
+import { cameraBearing, compass, compassBearing, escapeHtml, excerpt, glanceHtml, glanceOffset, goodStatus, thumbIconId, THUMB_PREFIX } from '../src/map/spotGlance.js';
 import { categoryOf } from '../src/map/legend.js';
 
 const gt = { phases: [], months: [], days: 'any', conditions: [], eventKeywords: [], avoid: '', notes: '' };
@@ -54,4 +54,20 @@ test('glance card html: escapes, thumbnail, meta, tags, notes', () => {
 test('legend groups the thumbnail layers with spots', () => {
   for (const id of ['spot-points', 'spot-thumbs', 'place-spot-thumbs', 'spot-label'])
     assert.equal(categoryOf({ id, type: 'symbol', source: 'spots' }), 'spots');
+});
+
+test('compassBearing: abbreviations, words and "-bound"; null otherwise', () => {
+  assert.equal(compassBearing('W'), 270);
+  assert.equal(compassBearing('north-east'), 45);
+  assert.equal(compassBearing('Southbound'), 180);
+  assert.equal(compassBearing('SSW'), 202.5);
+  assert.equal(compassBearing('Both directions'), null);
+  assert.equal(compassBearing(''), null);
+});
+
+test('cameraBearing: direction field first, then "looking …" in the view text', () => {
+  assert.equal(cameraBearing('E', 'Anzac Bridge looking west'), 90);
+  assert.equal(cameraBearing('', 'Anzac Bridge looking east towards the city.'), 90);
+  assert.equal(cameraBearing('', 'M4 at Parramatta facing south-west'), 225);
+  assert.equal(cameraBearing('', 'Eastern Distributor'), null);
 });

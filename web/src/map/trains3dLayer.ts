@@ -3,7 +3,7 @@
  * Shares the colour program with planes3dLayer; fades in with pitch like the 3D planes.
  */
 import { MercatorCoordinate, type CustomLayerInterface, type CustomRenderMethodInput, type Map as MlMap } from 'maplibre-gl';
-import { colourProgram, drawColoured, translated } from './planes3dLayer.js';
+import { colourProgram, drawColoured, translated, type ColouredProgram } from './planes3dLayer.js';
 import { pitchBlend, zoomBlend } from './planes3d.js';
 import { boxTriangles, CAR_HEIGHT_M, CAR_LEN_M, CAR_WIDTH_M, placeCarriages } from './trains3d.js';
 
@@ -27,7 +27,7 @@ export class Trains3dLayer implements CustomLayerInterface {
   type = 'custom' as const;
   renderingMode = '3d' as const;
   private map?: MlMap;
-  private prog?: WebGLProgram;
+  private prog?: ColouredProgram;
   private buf?: WebGLBuffer;
   private trains: Train3d[] = [];
 
@@ -63,6 +63,18 @@ export class Trains3dLayer implements CustomLayerInterface {
     const padLng = (bounds.getEast() - bounds.getWest()) * 0.2;
     const padLat = (bounds.getNorth() - bounds.getSouth()) * 0.2;
 
+    const elevCache = new Map<string, number>();
+    const getElev = (coord: [number, number]): number => {
+      if (!terrain) return 0;
+      const key = `${coord[0].toFixed(5)},${coord[1].toFixed(5)}`;
+      let el = elevCache.get(key);
+      if (el === undefined) {
+        el = map.queryTerrainElevation(coord) ?? 0;
+        elevCache.set(key, el);
+      }
+      return el;
+    };
+
     const tris: number[] = [];
     const no3d = new Set<string>();
     for (const t of this.trains) {
@@ -73,8 +85,8 @@ export class Trains3dLayer implements CustomLayerInterface {
       cars.forEach((car, i) => {
         const f = MercatorCoordinate.fromLngLat(car.front, 0);
         const r = MercatorCoordinate.fromLngLat(car.rear, 0);
-        const zf = (terrain ? (map.queryTerrainElevation(car.front) ?? 0) : 0) + LIFT_M;
-        const zr = (terrain ? (map.queryTerrainElevation(car.rear) ?? 0) : 0) + LIFT_M;
+        const zf = getElev(car.front) + LIFT_M;
+        const zr = getElev(car.rear) + LIFT_M;
         // Local metres relative to the origin: x east, y north (mercator y grows south).
         const toM = (m: MercatorCoordinate): [number, number] => [(m.x - o[0]) / unit, -(m.y - o[1]) / unit];
         const box = boxTriangles(toM(r), toM(f), CAR_WIDTH_M * widen, CAR_HEIGHT_M * widen, zr, zf);

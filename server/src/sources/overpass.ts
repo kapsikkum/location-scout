@@ -12,17 +12,20 @@ export const OVERPASS_MIRRORS = [
 
 const TRANSIENT = new Set([429, 502, 503, 504]);
 
-export async function overpassQuery<T>(query: string, opts: { timeoutMs?: number; mirrors?: string[]; fetchImpl?: typeof fetch; retryDelayMs?: number } = {}): Promise<T> {
-  const { timeoutMs = 25_000, mirrors = OVERPASS_MIRRORS, fetchImpl = fetch, retryDelayMs = 1000 } = opts;
+export async function overpassQuery<T>(query: string, opts: { timeoutMs?: number; mirrors?: string[]; fetchImpl?: typeof fetch; retryDelayMs?: number; deadlineMs?: number } = {}): Promise<T> {
+  const { timeoutMs = 25_000, mirrors = OVERPASS_MIRRORS, fetchImpl = fetch, retryDelayMs = 1000, deadlineMs = Infinity } = opts;
+  const end = Date.now() + deadlineMs;
   const errors: string[] = [];
   for (const url of mirrors) {
     for (let attempt = 0; attempt < 2; attempt++) {
+      const remaining = end - Date.now();
+      if (remaining <= 0) { errors.push('deadline exceeded'); throw new Error(`Overpass unavailable (${errors.join('; ')})`); }
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      const timer = setTimeout(() => controller.abort(), Math.min(timeoutMs, remaining));
       try {
         const res = await fetchImpl(url, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'User-Agent': 'location-scout' },
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'User-Agent': 'location-scout/0.1 (+https://github.com/kapsikkum/location-scout)' },
           body: `data=${encodeURIComponent(query)}`,
           signal: controller.signal,
         });

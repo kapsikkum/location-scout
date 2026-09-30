@@ -19,3 +19,15 @@ test('overpassQuery: a 200 with a non-JSON error page counts as a failure; all f
   const fetchImpl = (async () => resp(200, '<html>runtime error</html>')) as unknown as typeof fetch;
   await assert.rejects(overpassQuery('q', { mirrors: ['https://a.test/i'], fetchImpl, retryDelayMs: 0 }), /Overpass unavailable \(a\.test non-JSON/);
 });
+
+test('overpassQuery: deadlineMs stops trying mirrors/attempts once elapsed', async () => {
+  const hang = ((_u: string, init: RequestInit) => new Promise((_, rej) => {
+    init.signal!.addEventListener('abort', () => rej(Object.assign(new Error('aborted'), { name: 'AbortError' })));
+  })) as unknown as typeof fetch;
+  const t0 = Date.now();
+  await assert.rejects(
+    overpassQuery('q', { mirrors: ['https://a.test/i', 'https://b.test/i', 'https://c.test/i'], fetchImpl: hang, timeoutMs: 60, deadlineMs: 100, retryDelayMs: 0 }),
+    /Overpass unavailable/,
+  );
+  assert.ok(Date.now() - t0 < 500, 'gave up near the deadline');
+});
