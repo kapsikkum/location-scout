@@ -47,6 +47,7 @@ export function MapMenus({ menus }: { menus: Menu[] }) {
                   const toggle = i.on !== undefined;
                   return (
                     <button type="button" key={i.key} className={`mapmenu__item${i.on ? ' mapmenu__item--on' : ''}`} title={i.title}
+                      aria-label={i.label}
                       role={toggle ? 'menuitemcheckbox' : 'menuitem'} aria-checked={toggle ? i.on : undefined}
                       onClick={() => { i.onSelect(); if (!toggle) setOpen(null); }}>
                       <span className="mapmenu__sw">{i.swatch}</span>
