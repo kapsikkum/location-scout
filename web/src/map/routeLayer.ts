@@ -6,6 +6,7 @@
  * - 'route-glow': broad translucent contrast bed.
  * - 'route-casing': crisp high-contrast outline.
  * - 'route-lines': the typed route line (sprint=solid, circuit=dashed).
+ * - 'route-pulse': a bright comet that travels along each route, start to finish.
  * - 'route-arrows': chevrons along the line showing the direction of travel.
  *
  * The map source 'routes' is a GeoJSON LineString FeatureCollection with one
@@ -18,12 +19,13 @@ import type { Map as MlMap } from 'maplibre-gl';
 import { GeoJSONSource } from 'maplibre-gl';
 import type { Route } from '../api.js';
 
-export const ROUTE_LAYERS = ['route-glow', 'route-casing', 'route-lines', 'route-arrows', 'route-staging-halo', 'route-staging'] as const;
+export const ROUTE_LAYERS = ['route-glow', 'route-casing', 'route-lines', 'route-pulse', 'route-arrows', 'route-staging-halo', 'route-staging'] as const;
 
 /** Layer IDs — also re-exported for clickable list and toggling. */
 export const ROUTE_GLOW_LAYER = 'route-glow';
 export const ROUTE_CASING_LAYER = 'route-casing';
 export const ROUTE_LINE_LAYER = 'route-lines';
+export const ROUTE_PULSE_LAYER = 'route-pulse';
 export const ROUTE_ARROW_LAYER = 'route-arrows';
 const ROUTE_ARROW_IMAGE = 'route-arrow';
 export const ROUTE_STAGING_HALO_LAYER = 'route-staging-halo';
@@ -97,6 +99,20 @@ export function initRouteLayers(map: MlMap, beforeLayer?: string) {
       'line-dasharray': ['match', ['get', 'type'], 'circuit', ['literal', [1.8, 1.1]], ['literal', [1, 0]]] as any,
     },
   }, beforeLayer);
+
+  // Travelling comet: line-gradient over line-progress, so it runs start to finish on every route.
+  map.addLayer({
+    id: ROUTE_PULSE_LAYER,
+    type: 'line',
+    source: ROUTE_SOURCE,
+    layout: { 'line-cap': 'round', 'line-join': 'round' },
+    paint: {
+      'line-width': ['case', ['get', 'selected'], 5, 4] as any,
+      'line-blur': 1,
+      'line-gradient': routePulseGradient(0),
+    },
+  }, beforeLayer);
+  animateRoutePulse(map);
 
   // Direction chevrons along the line (no text/fonts needed).
   if (!map.hasImage(ROUTE_ARROW_IMAGE)) map.addImage(ROUTE_ARROW_IMAGE, arrowImage(), { pixelRatio: 2 });
@@ -194,5 +210,54 @@ export function updateRoutes(map: MlMap, routes: Route[], selectedId: string | n
 
   const { segments, staging } = routeFeatureCollections(routes, selectedId);
   src.setData(segments);
+  hasRoutes.set(map, segments.features.length > 0);
   stagSrc.setData(staging);
+}
+
+const PULSE_PERIOD_MS = 3200;
+const PULSE_LEN = 0.22; // share of the route the comet tail covers
+const WHITE = [255, 255, 255];
+
+/**
+ * Comet gradient at phase 0..1. The head runs from 0 to 1 + PULSE_LEN so the tail
+ * leaves the finish smoothly before the next lap starts (no pop at the wrap).
+ */
+export function routePulseGradient(phase: number) {
+  const head = phase * (1 + PULSE_LEN);
+  // [progress, alpha]: fade-in tail, bright head, hard front edge.
+  const stops: [number, number][] = [[head - PULSE_LEN, 0], [head - 0.02, 0.95], [head, 1], [head + 0.004, 0]];
+  // line-gradient needs ascending stops inside [0, 1]: clip, sampling alpha at the edges.
+  const alphaAt = (x: number) => {
+    if (x <= stops[0][0]) return 0;
+    for (let i = 1; i < stops.length; i++) {
+      const [x0, a0] = stops[i - 1], [x1, a1] = stops[i];
+      if (x <= x1) return a0 + (a1 - a0) * (x - x0) / (x1 - x0);
+    }
+    return 0;
+  };
+  const rgba = (a: number) => `rgba(${WHITE.join(',')},${a.toFixed(3)})`;
+  const expr: any[] = ['interpolate', ['linear'], ['line-progress'], 0, rgba(alphaAt(0))];
+  for (const [x, a] of stops) if (x > 0 && x < 1) expr.push(x, rgba(a));
+  expr.push(1, rgba(alphaAt(1)));
+  return expr as any;
+}
+
+/** Whether the map currently draws any route, so the comet can idle. */
+const hasRoutes = new WeakMap<MlMap, boolean>();
+
+/** Drive the comet at ~30 fps while routes are visible; idles (no repaints) otherwise. */
+function animateRoutePulse(map: MlMap) {
+  let raf = 0;
+  let last = 0;
+  const frame = (now: number) => {
+    raf = requestAnimationFrame(frame);
+    if (now - last < 33 || !hasRoutes.get(map) || !map.getLayer(ROUTE_PULSE_LAYER)) return;
+    if (map.getLayoutProperty(ROUTE_PULSE_LAYER, 'visibility') === 'none') return;
+    // ponytail: pauses during camera moves in 3D only, where each paint change re-renders terrain textures.
+    if (map.getTerrain() && map.isMoving()) return;
+    last = now;
+    map.setPaintProperty(ROUTE_PULSE_LAYER, 'line-gradient', routePulseGradient((now % PULSE_PERIOD_MS) / PULSE_PERIOD_MS));
+  };
+  raf = requestAnimationFrame(frame);
+  map.once('remove', () => cancelAnimationFrame(raf));
 }

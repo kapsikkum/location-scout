@@ -4,6 +4,7 @@ import type { Route } from '../src/api.js';
 import {
   ROUTE_LAYERS,
   routeFeatureCollections,
+  routePulseGradient,
 } from '../src/map/routeLayer.js';
 
 const route = (patch: Partial<Route>): Route => ({
@@ -61,8 +62,18 @@ test('ROUTE_LAYERS includes every rendered route overlay layer', () => {
     'route-glow',
     'route-casing',
     'route-lines',
+    'route-pulse',
     'route-arrows',
     'route-staging-halo',
     'route-staging',
   ]);
+});
+
+test('routePulseGradient keeps stops ascending inside [0, 1] for every phase', () => {
+  for (let phase = 0; phase <= 1; phase += 0.01) {
+    const xs = (routePulseGradient(phase) as unknown[]).slice(3).filter((_, i) => i % 2 === 0) as number[];
+    assert.equal(xs[0], 0);
+    assert.equal(xs.at(-1), 1);
+    for (let i = 1; i < xs.length; i++) assert.ok(xs[i] > xs[i - 1], `phase ${phase}: ${xs}`);
+  }
 });
