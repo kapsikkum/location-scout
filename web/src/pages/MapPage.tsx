@@ -1055,12 +1055,10 @@ export default function MapPage({ user }: { user: User | null }) {
             (id) => startFollow('train', id));
         }} />
       <div className="maptools">
+        <button className={`chip${imagery ? ' active' : ''}`} onClick={() => toggle('imagery')}><Swatch cat={category('imagery')} />{category('imagery').label}</button>
+        <button className={`chip${terrain ? ' active' : ''}`} onClick={() => setTerrainOn(!terrain)}>3D</button>
+        <button className={`chip${goodOnly ? ' active' : ''}`} onClick={() => setGoodOnly(!goodOnly)} title="Only spots whose good times match the map time">Good now</button>
         <MapMenus menus={[
-          { label: 'Map', items: [
-            { key: 'imagery', label: category('imagery').label, swatch: <Swatch cat={category('imagery')} />, on: imagery, onSelect: () => toggle('imagery') },
-            { key: '3d', label: '3D', on: terrain, onSelect: () => setTerrainOn(!terrain) },
-            { key: 'good', label: 'Good now', on: goodOnly, title: 'Only spots whose good times match the map time', onSelect: () => setGoodOnly(!goodOnly) },
-          ] },
           { label: 'Live', items: [
             { key: 'planes', label: category('planes').label, swatch: <Swatch cat={category('planes')} />, on: planesOn, title: 'Live aircraft, dead-reckoned 15 minutes ahead', onSelect: () => toggle('planes') },
             { key: 'trains', label: category('trains').label, swatch: <Swatch cat={category('trains')} />, on: trainsOn, title: 'Live passenger train positions, refreshed every 20s (needs a TfNSW key)', onSelect: () => toggle('trains') },
