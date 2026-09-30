@@ -1354,12 +1354,30 @@ function showCameraPopup(map: MlMap, at: [number, number], p: Record<string, any
   const fallbackAttr = proxyUrl && directUrl ? ` onerror="if(this.src!=='${escapeHtml(proxyUrl)}'){this.src='${escapeHtml(proxyUrl)}';}"` : '';
 
   const html = `<div class="camera-popup">`
-    + (imgUrl ? `<div style="margin-bottom:6px;"><img src="${escapeHtml(imgUrl)}"${fallbackAttr} alt="${title}" style="width:100%;max-width:320px;height:auto;border-radius:4px;display:block;background:#171a21;" loading="lazy" /></div>` : '')
+    + (imgUrl ? `<div style="margin-bottom:6px;"><img src="${escapeHtml(imgUrl)}"${fallbackAttr} alt="${title}" title="Click to enlarge" style="width:100%;max-width:320px;height:auto;border-radius:4px;display:block;background:#171a21;cursor:zoom-in;" loading="lazy" /></div>` : '')
     + `<strong>${title}</strong>`
     + (direction ? ` <span>(${direction})</span>` : '')
     + (view && view !== title ? `<br/><span style="font-size:11px;color:#8a93a6;">${view}</span>` : '')
     + `</div>`;
-  openPopup(map, at, html);
+  const popup = openPopup(map, at, html);
+  const img = popup.getElement()?.querySelector<HTMLImageElement>('.camera-popup img');
+  img?.addEventListener('click', () => openCameraLightbox(img.currentSrc || img.src, img.alt));
+}
+
+/** Full-screen view of a camera frame, reusing the photo lightbox styles. Click, ✕ or Escape closes. */
+function openCameraLightbox(src: string, caption: string) {
+  const box = document.createElement('div');
+  box.className = 'lightbox';
+  box.setAttribute('role', 'dialog');
+  box.setAttribute('aria-label', caption);
+  box.innerHTML = `<img src="${escapeHtml(src)}" alt="${escapeHtml(caption)}" /><div class="lightbox__caption">${escapeHtml(caption)}</div>`
+    + `<button type="button" class="lightbox__close" aria-label="Close">✕</button>`;
+  const close = () => { box.remove(); window.removeEventListener('keydown', onKey); };
+  const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') close(); };
+  box.addEventListener('click', close);
+  window.addEventListener('keydown', onKey);
+  document.body.appendChild(box);
+  box.querySelector('button')?.focus();
 }
 
 function openPopup(map: MlMap, at: [number, number], html: string, onFollow?: () => void) {
