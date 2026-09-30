@@ -435,7 +435,7 @@ export const api = {
 
   // --- candidates + Commons ---
   candidates: (bbox?: string) => fetch(`/api/candidates${bbox ? `?bbox=${bbox}` : ''}`).then((r) => json<Candidate[]>(r)),
-  roads: (bbox: string) => fetch(`/api/roads?bbox=${bbox}`).then((r) => json<GeoJSON.FeatureCollection>(r)),
+  roads: (cell: string) => fetch(`/api/roads?cell=${cell}`).then((r) => json<GeoJSON.FeatureCollection>(r)),
   promoteCandidate: (id: string) => fetch(`/api/candidates/${id}/promote`, { method: 'POST' }).then((r) => json<Spot>(r)),
   spotCommons: (spotId: string) =>
     fetch(`/api/spots/${spotId}/commons`)

@@ -23,7 +23,7 @@ import { fetchMarine } from './feeds/marine.js';
 import { fetchFires } from './feeds/rfs.js';
 import { fetchAurora } from './feeds/spaceWeather.js';
 import { fetchBuildings } from './sources/osm.js';
-import { cellsFor, fetchRoadCell, type RoadFeature } from './sources/roads.js';
+import { fetchRoadCell, parseCell } from './sources/roads.js';
 import { fetchCameras } from './feeds/cameras.js';
 import {
   buildPointPassesResponse, combinedFeedData, combinedRealtime, emptyFeedData, nextPasses, parsePointPassRequest, predictTrainPositions, tripCount, TRAIN_FEEDS,
@@ -877,29 +877,28 @@ app.get('/api/candidates', (req, res) => {
   }
 });
 
-// Road quality (OSM): per 0.05 degree cell, cached 14 days. bbox is capped to roughly a z13 viewport.
+// Road quality (OSM): one 0.05 degree grid cell per request (?cell=south,west), cached 14 days.
+// Concurrent requests for the same cell share one Overpass fetch.
+const roadsInflight = new Map<string, Promise<string>>();
 app.get('/api/roads', async (req, res) => {
-  let cells: ReturnType<typeof cellsFor>;
+  const c = parseCell(String(req.query.cell ?? ''));
+  if (!c) return res.status(400).json({ error: 'cell must be south,west on the 0.05 degree grid' });
+  const key = `roads:${c.south},${c.west}`;
   try {
-    const b = parseBbox(String(req.query.bbox ?? ''));
-    if (b.north <= b.south || b.east <= b.west) throw new Error('bbox is empty');
-    if ((b.north - b.south) * (b.east - b.west) > 0.12) throw new Error('bbox too large; zoom in');
-    cells = cellsFor(b);
-  } catch (err) { return res.status(400).json({ error: (err as Error).message }); }
-  try {
-    const features = new Map<number, RoadFeature>(); // ways spanning cells appear once
-    for (const c of cells) {
-      const key = `roads:${c.south},${c.west}`;
-      let cell: RoadFeature[];
-      const cached = db.getKv(key);
-      if (cached) cell = JSON.parse(cached);
-      else {
-        cell = await fetchRoadCell(c);
-        db.setKv(key, JSON.stringify(cell), new Date(Date.now() + 14 * 86_400_000).toISOString());
+    let json = db.getKv(key);
+    if (!json) {
+      let p = roadsInflight.get(key);
+      if (!p) {
+        p = fetchRoadCell(c).then((cell) => {
+          const out = JSON.stringify(cell);
+          db.setKv(key, out, new Date(Date.now() + 14 * 86_400_000).toISOString());
+          return out;
+        }).finally(() => roadsInflight.delete(key));
+        roadsInflight.set(key, p);
       }
-      for (const f of cell) features.set(f.id, f);
+      json = await p;
     }
-    res.json({ type: 'FeatureCollection', features: [...features.values()] });
+    res.type('json').send(`{"type":"FeatureCollection","features":${json}}`);
   } catch (err) {
     res.status(503).json({ error: (err as Error).message });
   }

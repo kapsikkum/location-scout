@@ -59,8 +59,19 @@ export function cellsFor(b: Bbox): Bbox[] {
   return cells;
 }
 
+/** Pure. "south,west" -> cell if finite, in range and on the CELL_DEG grid; else null. */
+export function parseCell(raw: string): Bbox | null {
+  const m = /^(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)$/.exec(raw);
+  if (!m) return null;
+  const [south, west] = [Number(m[1]), Number(m[2])];
+  if (south < -90 || south > 90 - CELL_DEG || west < -180 || west > 180 - CELL_DEG) return null;
+  const on = (n: number) => Math.abs(n / CELL_DEG - Math.round(n / CELL_DEG)) < 1e-6;
+  if (!on(south) || !on(west)) return null;
+  return cellsFor({ south: south + 1e-6, west: west + 1e-6, north: south + 1e-6, east: west + 1e-6 })[0];
+}
+
 export async function fetchRoadCell(c: Bbox): Promise<RoadFeature[]> {
-  const q = `[out:json][timeout:60];way["highway"~"^(motorway|trunk|primary|secondary|tertiary|unclassified|residential|service|track)(_link)?$"](${c.south},${c.west},${c.north},${c.east});out geom tags;`;
+  const q = `[out:json][timeout:60];way["highway"~"^(motorway|trunk|primary|secondary|tertiary|unclassified|residential|track)(_link)?$"](${c.south},${c.west},${c.north},${c.east});out geom tags;`;
   const { elements } = await overpassQuery<{ elements: RoadElement[] }>(q, { timeoutMs: 30_000 });
   return elements.map(roadFeature).filter((f): f is RoadFeature => f !== null);
 }

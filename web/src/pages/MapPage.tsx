@@ -1,3 +1,4 @@
+import { loadRoads, type RoadsStatus } from '../map/roadQuality';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { GeoJSONSource, LngLatBounds, Map as MlMap, MapMouseEvent, Marker, NavigationControl, Point, Popup, ScaleControl, setWorkerUrl } from 'maplibre-gl';
@@ -135,6 +136,7 @@ export default function MapPage({ user }: { user: User | null }) {
   const followRef = useRef<Follow | null>(null);
   followRef.current = follow;
   const [followNote, setFollowNote] = useState('');
+  const [roadsStatus, setRoadsStatus] = useState<RoadsStatus | 'zoom'>('');
 
   const canEdit = (ownerId: string) => !!user && (user.role === 'admin' || user.id === ownerId);
 
@@ -274,16 +276,14 @@ export default function MapPage({ user }: { user: User | null }) {
     return () => { stop = true; };
   }, [map, candidatesOn, view]);
 
-  // Road quality: OSM roads graded by surface, fetched by bbox from z13 while the layer is on.
+  // Road quality: OSM roads graded by surface, fetched per grid cell from z13 while the layer is on.
   useEffect(() => {
     if (!map) return;
     const on = vis['road-quality'];
     setLayerVisible(map, ['road-quality'], on);
-    if (!on || map.getZoom() < ROADS_MIN_ZOOM) return;
-    let stop = false;
-    const b = map.getBounds();
-    api.roads(`${b.getSouth()},${b.getWest()},${b.getNorth()},${b.getEast()}`).then((r) => { if (!stop) updateRoads(map, r); }).catch(() => {});
-    return () => { stop = true; };
+    if (!on) return setRoadsStatus('');
+    if (map.getZoom() < ROADS_MIN_ZOOM) return setRoadsStatus('zoom');
+    loadRoads(map, api.roads, setRoadsStatus);
   }, [map, vis['road-quality'], view]);
 
   // NSW RFS fire incidents: fetched on mount and polled every 5 min.
@@ -1012,6 +1012,9 @@ export default function MapPage({ user }: { user: User | null }) {
         </div>
       )}
       {followNote && !follow && <div className="maptoast">{followNote}</div>}
+      {roadsStatus && <div className={`maptoast${roadsStatus === 'failed' ? ' error' : ''}`} role="status">{{
+        loading: 'Loading roads…', failed: 'Road data unavailable — Overpass busy, retry by moving the map', zoom: 'Zoom in to see road quality',
+      }[roadsStatus]}</div>}
       {mode !== 'browse' && (
         <div className="maptoast">
           {mode === 'pick-spot'
