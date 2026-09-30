@@ -2,6 +2,8 @@
 
 A self-hosted map of photography spots and when the light works at them.
 
+![Mount Panorama in 3D on satellite at sunset](docs/screenshots/05-3d-mount-panorama.webp)
+
 ## What it does
 
 - **Spots and places.** Save spots (a point, a facing direction, a field of view, notes, photos, "good times") grouped into places with outlines. GPS is read from uploaded photos, then stripped before they're stored.
@@ -10,6 +12,18 @@ A self-hosted map of photography spots and when the light works at them.
 - **Live feeds.** Planes overhead (adsb.lol), NSW passenger trains (TfNSW), a rail network layer with crowdsourced freight sightings, nearby events and crowds from [event-scout](../event-scout), Wikimedia Commons photos, and OpenStreetMap suggestions you can turn into spots.
 - **Import, export, share.** KML/KMZ, GPX, GeoJSON, CSV and Google Takeout in; GeoJSON, GPX or a zip with photos out. Share links, and syncing spots from other instances.
 - **Users.** Private (everything behind a login) or public (anonymous visitors see public spots). Admin, contributors, optional sign-up.
+
+## Screenshots
+
+| | |
+|---|---|
+| ![Map overview at sunset](docs/screenshots/01-map-overview.webp) Map at sunset, sun and moon rays | ![Spot panel](docs/screenshots/02-spot-panel.webp) A spot: facing wedge, photos, good times |
+| ![Photo viewer](docs/screenshots/03-photo-viewer.webp) Photo viewer | ![Photo hover card](docs/screenshots/04-photo-markers.webp) Hover a spot for its photo |
+| ![Capertee Valley in 3D](docs/screenshots/06-3d-capertee-valley.webp) 3D terrain, Capertee Valley | ![Live trains](docs/screenshots/07-trains.webp) Live and scheduled trains |
+| ![Route](docs/screenshots/08-route.webp) A route | ![Traffic camera](docs/screenshots/09-traffic-camera.webp) Live traffic camera, 3D at night |
+| ![Rain radar](docs/screenshots/10-weather.webp) Rain radar and cloud | ![Light pollution](docs/screenshots/11-light-pollution.webp) Light pollution |
+| ![Plan shoot](docs/screenshots/12-plan-shoot.webp) Plan shoot: ranked windows | <img src="docs/screenshots/13-phone-spot.webp" alt="Phone layout" width="180"> Phone layout |
+| ![Import and export](docs/screenshots/14-import-export.webp) Import, export, share | ![Settings](docs/screenshots/15-settings.webp) Settings |
 
 ## Run it
 
