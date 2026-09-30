@@ -72,6 +72,6 @@ export function parseCell(raw: string): Bbox | null {
 
 export async function fetchRoadCell(c: Bbox): Promise<RoadFeature[]> {
   const q = `[out:json][timeout:60];way["highway"~"^(motorway|trunk|primary|secondary|tertiary|unclassified|residential|track)(_link)?$"](${c.south},${c.west},${c.north},${c.east});out geom tags;`;
-  const { elements } = await overpassQuery<{ elements: RoadElement[] }>(q, { timeoutMs: 30_000 });
+  const { elements } = await overpassQuery<{ elements: RoadElement[] }>(q, { timeoutMs: 12_000, deadlineMs: 20_000 });
   return elements.map(roadFeature).filter((f): f is RoadFeature => f !== null);
 }
