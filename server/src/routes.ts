@@ -12,6 +12,8 @@ export interface RouteRow {
   access: string;
   type: RouteType;
   vertices: string;
+  waypoints: string | null;
+  snap: number;
   staging: string | null;
   visibility: Visibility;
   created_at: string;
@@ -36,6 +38,24 @@ export function parseRouteVertices(value: unknown): RouteVertex[] {
   });
 }
 
+export function parseRouteWaypoints(value: unknown): RouteVertex[] {
+  try {
+    return parseRouteVertices(value);
+  } catch (err) {
+    throw new Error((err as Error).message.replace(/vertices/g, 'waypoints').replace(/vertex/g, 'waypoint'));
+  }
+}
+
+/** JSON for the waypoints column; null/undefined clear it. */
+export function serializeRouteWaypoints(value: unknown): string | null {
+  return value == null ? null : JSON.stringify(parseRouteWaypoints(value));
+}
+
+export function parseRouteSnap(value: unknown): boolean {
+  if (typeof value !== 'boolean') throw new Error('snap must be a boolean');
+  return value;
+}
+
 export function parseRouteStaging(value: unknown): RouteStaging | null {
   if (value == null) return null;
   if (typeof value !== 'object') throw new Error('staging must be null or { lat, lng }');
@@ -56,6 +76,8 @@ export function routeJson(r: RouteRow) {
     access: r.access,
     type: r.type,
     vertices: JSON.parse(r.vertices) as RouteVertex[],
+    ...(r.waypoints == null ? {} : { waypoints: JSON.parse(r.waypoints) as RouteVertex[] }),
+    snap: !!r.snap,
     staging: r.staging ? JSON.parse(r.staging) as RouteStaging : null,
     visibility: r.visibility,
     createdAt: r.created_at,

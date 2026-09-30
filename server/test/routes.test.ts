@@ -1,9 +1,16 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { DatabaseSync } from 'node:sqlite';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { createDb } from '../src/db.js';
 import {
+  parseRouteSnap,
   parseRouteStaging,
   parseRouteVertices,
+  parseRouteWaypoints,
+  serializeRouteWaypoints,
   routeJson,
   type RouteRow,
 } from '../src/routes.js';
@@ -22,6 +29,8 @@ function insertRoute(
     type?: RouteType;
     vertices?: [number, number][];
     staging?: { lat: number; lng: number } | null;
+    waypoints?: [number, number][];
+    snap?: boolean;
     visibility?: Visibility;
   } = {},
 ) {
@@ -29,7 +38,7 @@ function insertRoute(
   const now = new Date().toISOString();
   db.handle
     .prepare(
-      'INSERT INTO routes (id, owner_id, name, notes, access, type, vertices, staging, visibility, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      'INSERT INTO routes (id, owner_id, name, notes, access, type, vertices, waypoints, snap, staging, visibility, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
     )
     .run(
       id,
@@ -39,6 +48,8 @@ function insertRoute(
       opts.access ?? '',
       opts.type ?? 'sprint',
       JSON.stringify(opts.vertices ?? [[151.2, -33.8], [151.3, -33.7]]),
+      opts.waypoints === undefined ? null : JSON.stringify(opts.waypoints),
+      opts.snap ? 1 : 0,
       opts.staging ? JSON.stringify(opts.staging) : null,
       opts.visibility ?? 'private',
       now,
@@ -67,6 +78,28 @@ test('routes: a persisted route round-trips ordered vertices, type, staging and 
   assert.deepEqual(out.vertices, [[151.2, -33.8], [151.3, -33.7], [151.4, -33.6]]);
   assert.deepEqual(out.staging, { lat: -33.85, lng: 151.15 });
   assert.equal(out.visibility, 'public');
+});
+
+test('routes: waypoints and snap settings persist and serialize', () => {
+  const db = createDb(':memory:');
+  const waypoints: [number, number][] = [[151.2, -33.8], [151.3, -33.7]];
+  insertRoute(db, { waypoints, snap: true });
+  assert.deepEqual(routeJson(getRoute(db)).waypoints, waypoints);
+  assert.equal(routeJson(getRoute(db)).snap, true);
+});
+
+test('routes: null waypoints clear the column, valid ones serialize', () => {
+  assert.equal(serializeRouteWaypoints(null), null);
+  assert.equal(serializeRouteWaypoints([[151.2, -33.8]]), '[[151.2,-33.8]]');
+  assert.throws(() => serializeRouteWaypoints('bad'));
+});
+
+test('routes: legacy rows omit waypoints and default snap to false', () => {
+  const db = createDb(':memory:');
+  insertRoute(db);
+  const out = routeJson(getRoute(db));
+  assert.equal('waypoints' in out, false);
+  assert.equal(out.snap, false);
 });
 
 test('routes: staging is nullable and separate from route vertices', () => {
@@ -118,6 +151,31 @@ test('routes: vertex validation requires finite [lng, lat] pairs in bounds', () 
   assert.throws(() => parseRouteVertices('bad'), /vertices must be an array/);
   assert.throws(() => parseRouteVertices([[151.2, 'bad']]), /vertex 1 must be \[lng, lat\] numbers/);
   assert.throws(() => parseRouteVertices([[181, -33.8]]), /outside valid lng\/lat bounds/);
+});
+
+test('routes: waypoint and snap validation reject malformed input', () => {
+  assert.deepEqual(parseRouteWaypoints([[151.2, -33.8]]), [[151.2, -33.8]]);
+  assert.throws(() => parseRouteWaypoints([[151.2, 91]]), /waypoint 1 is outside valid lng\/lat bounds/);
+  assert.throws(() => parseRouteWaypoints([[151.2, 'bad']]), /waypoint 1 must be \[lng, lat\] numbers/);
+  assert.equal(parseRouteSnap(true), true);
+  assert.throws(() => parseRouteSnap(1), /snap must be a boolean/);
+});
+
+test('routes: opening a pre-waypoint database adds compatible columns', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'location-scout-routes-'));
+  const file = path.join(dir, 'legacy.db');
+  const legacy = new DatabaseSync(file);
+  legacy.exec("CREATE TABLE routes (id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, name TEXT NOT NULL, notes TEXT NOT NULL DEFAULT '', access TEXT NOT NULL DEFAULT '', type TEXT NOT NULL DEFAULT 'sprint', vertices TEXT NOT NULL DEFAULT '[]', staging TEXT, visibility TEXT NOT NULL DEFAULT 'private', created_at TEXT NOT NULL, updated_at TEXT NOT NULL)");
+  legacy.close();
+  try {
+    const db = createDb(file);
+    const cols = db.handle.prepare('PRAGMA table_info(routes)').all() as { name: string }[];
+    assert.ok(cols.some((col) => col.name === 'waypoints'));
+    assert.ok(cols.some((col) => col.name === 'snap'));
+    db.handle.close();
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('routes: staging validation accepts null or finite lat/lng in bounds', () => {

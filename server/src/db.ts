@@ -137,6 +137,8 @@ CREATE TABLE IF NOT EXISTS routes (
   access TEXT NOT NULL DEFAULT '',
   type TEXT NOT NULL DEFAULT 'sprint',
   vertices TEXT NOT NULL DEFAULT '[]',
+  waypoints TEXT,
+  snap INTEGER NOT NULL DEFAULT 0,
   staging TEXT,
   visibility TEXT NOT NULL DEFAULT 'private',
   created_at TEXT NOT NULL,
@@ -227,6 +229,8 @@ export function createDb(filePath: string = path.join(dataDir, 'location-scout.d
   addColumnIfMissing(handle, 'sightings', 'loaded', 'loaded INTEGER');
   addColumnIfMissing(handle, 'photos', 'focal_length', 'focal_length REAL');
   addColumnIfMissing(handle, 'photos', 'date_time_original', 'date_time_original TEXT');
+  addColumnIfMissing(handle, 'routes', 'waypoints', 'waypoints TEXT');
+  addColumnIfMissing(handle, 'routes', 'snap', 'snap INTEGER NOT NULL DEFAULT 0');
 
   function getKv(key: string): string | null {
     const row = handle.prepare('SELECT value, expires_at FROM kv WHERE key = ?').get(key) as

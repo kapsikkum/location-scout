@@ -5,10 +5,13 @@
  * - sprint: straight legs joining consecutive vertices.
  * - circuit: same, plus a closing leg from the last vertex back to the first.
  *
- * Vertex manipulation (click-to-add, drag-to-move, click-segment-to-insert,
- * undo, clear) is handled by reusing PlaceOutlineVertexMarkers with kind='line'
- * from placeOutlineEdit.ts — see RouteEditor in the UI layer.
+ * Provides domain-specific calculations for rolling automotive photography:
+ * - Segment-by-segment bearings and distance telemetry.
+ * - Sun vs car relative lighting classification (side rim light, backlight flare, front glare).
+ * - Reversing stops.
+ * - OSRM road snapping and telemetry extraction.
  */
+import { angleDiff, bearing, haversineKm } from './geo.js';
 
 export type RouteType = 'sprint' | 'circuit';
 
@@ -51,21 +54,120 @@ export function routePlanAnchor(
   return null;
 }
 
-const OSRM = 'https://router.project-osrm.org/route/v1/driving';
-
-/** The road path from an OSRM route response, without its first point (the leg's start is already in the route). */
-export function osrmLegCoords(data: unknown): [number, number][] | null {
-  const coords = (data as { code?: string; routes?: { geometry?: { coordinates?: unknown } }[] })?.routes?.[0]?.geometry?.coordinates;
-  if ((data as { code?: string })?.code !== 'Ok' || !Array.isArray(coords) || coords.length < 2) return null;
-  return (coords as [number, number][]).slice(1);
+/** Total distance along route vertices in kilometres. */
+export function routeDistanceKm(vertices: [number, number][], type: RouteType = 'sprint'): number {
+  const segs = buildRouteSegments(vertices, type);
+  let total = 0;
+  for (const [from, to] of segs) {
+    total += haversineKm(from[1], from[0], to[1], to[0]);
+  }
+  return Math.round(total * 100) / 100;
 }
 
-/** Points to add for a click at `to` when snapping: the road path from `from`, or just `to` if routing fails. */
-export async function snapLeg(from: [number, number], to: [number, number]): Promise<[number, number][]> {
+/** Format seconds into human readable duration string (e.g. "3m 45s" or "1h 12m"). */
+export function formatDuration(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds <= 0) return '0s';
+  seconds = Math.round(seconds);
+  const mins = Math.floor(seconds / 60);
+  const secs = seconds % 60;
+  if (mins >= 60) {
+    const hrs = Math.floor(mins / 60);
+    const remMins = mins % 60;
+    return `${hrs}h ${remMins}m`;
+  }
+  if (mins === 0) return `${secs}s`;
+  return secs > 0 ? `${mins}m ${secs}s` : `${mins}m`;
+}
+
+/** Reverse route waypoints (flips direction of travel). */
+export function reverseWaypoints(pts: [number, number][]): [number, number][] {
+  return pts.slice().reverse();
+}
+
+/** The stops a user edits: saved waypoints, else the vertices of a small legacy route, else just its two ends. */
+export function routeStops(d: { vertices: [number, number][]; waypoints?: [number, number][] }): [number, number][] {
+  return d.waypoints ?? (d.vertices.length > 15 ? [d.vertices[0], d.vertices.at(-1)!] : d.vertices);
+}
+
+/** Marker and list label for a stop: A, 2, 3 ... B. */
+export function stopLabel(index: number, total: number): string {
+  return index === 0 ? 'A' : index === total - 1 ? 'B' : String(index + 1);
+}
+
+// --- Lighting -----------------------------------------------------------------
+
+export type LightingCategory = 'side' | 'backlit' | 'front';
+
+/** Sun relative to the car's heading: behind the car is backlit, ahead is front glare, else side light. */
+export function classifyLighting(carBearingDeg: number, sunAzimuthDeg: number): LightingCategory {
+  const angle = Math.abs(angleDiff(carBearingDeg, sunAzimuthDeg));
+  return angle > 135 ? 'backlit' : angle >= 45 ? 'side' : 'front';
+}
+
+/** Share of the route (by distance, whole percents) in each lighting category. */
+export function routeLightingMix(
+  vertices: [number, number][],
+  type: RouteType,
+  sunAzimuthDeg: number,
+): Record<LightingCategory, number> {
+  const dist: Record<LightingCategory, number> = { side: 0, backlit: 0, front: 0 };
+  let total = 0;
+  for (const [from, to] of buildRouteSegments(vertices, type)) {
+    const d = haversineKm(from[1], from[0], to[1], to[0]);
+    dist[classifyLighting(bearing(from[1], from[0], to[1], to[0]), sunAzimuthDeg)] += d;
+    total += d;
+  }
+  if (total <= 0) return { side: 0, backlit: 0, front: 0 };
+  const side = Math.round((dist.side / total) * 100), backlit = Math.round((dist.backlit / total) * 100);
+  return { side, backlit, front: Math.max(0, 100 - side - backlit) };
+}
+
+// --- OSRM API Helpers --------------------------------------------------------
+
+const OSRM = 'https://router.project-osrm.org/route/v1/driving';
+
+export interface OsrmFullRouteResult {
+  coordinates: [number, number][];
+  distanceMeters: number;
+  durationSeconds: number;
+}
+
+/** OSRM needs the closing stop explicitly so a loop follows roads back to Start. */
+export function routingWaypoints(waypoints: [number, number][], type: RouteType): [number, number][] {
+  if (type !== 'circuit' || waypoints.length < 2) return waypoints;
+  const first = waypoints[0], last = waypoints[waypoints.length - 1];
+  return first[0] === last[0] && first[1] === last[1] ? waypoints : [...waypoints, first];
+}
+
+/** Fetch full OSRM road route connecting an array of waypoints, including total distance & duration. */
+export async function fetchOsrmFullRoute(waypoints: [number, number][]): Promise<OsrmFullRouteResult | null> {
+  if (waypoints.length < 2) return null;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15_000);
   try {
-    const r = await fetch(`${OSRM}/${from[0]},${from[1]};${to[0]},${to[1]}?geometries=geojson&overview=full`);
-    return osrmLegCoords(await r.json()) ?? [to];
+    const locs = waypoints.map((pt) => `${pt[0]},${pt[1]}`).join(';');
+    const r = await fetch(`${OSRM}/${locs}?geometries=geojson&overview=full`, { signal: controller.signal });
+    if (!r.ok) return null;
+    const data = await r.json() as {
+      code?: string;
+      routes?: {
+        distance?: number;
+        duration?: number;
+        geometry?: { coordinates?: [number, number][] };
+      }[];
+    };
+    const route = data.routes?.[0];
+    const coordinates = route?.geometry?.coordinates;
+    if (data.code !== 'Ok' || !Array.isArray(coordinates) || coordinates.length < 2) return null;
+    if (!coordinates.every((point) => Array.isArray(point) && point.length === 2 && point.every(Number.isFinite))) return null;
+    return {
+      coordinates,
+      distanceMeters: route?.distance ?? 0,
+      durationSeconds: route?.duration ?? 0,
+    };
   } catch {
-    return [to];
+    return null;
+  } finally {
+    clearTimeout(timeout);
   }
 }

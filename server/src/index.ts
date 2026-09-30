@@ -37,7 +37,7 @@ import { assertPublicUrl, guardedFetch } from './ssrf.js';
 import { tasks } from './tasks/tasks.js';
 import { runDueTasksOnStartup, startScheduler } from './tasks/scheduler.js';
 import { versionInfo } from './version.js';
-import { isRouteType, parseRouteStaging, parseRouteVertices, routeJson, type RouteRow } from './routes.js';
+import { isRouteType, parseRouteSnap, parseRouteStaging, parseRouteVertices, serializeRouteWaypoints, routeJson, type RouteRow } from './routes.js';
 import crypto from 'node:crypto';
 
 declare global {
@@ -937,9 +937,13 @@ app.post('/api/routes', (req, res) => {
   const b = req.body as Record<string, unknown>;
   if (typeof b.name !== 'string' || !b.name.trim()) return res.status(400).json({ error: 'name is required' });
   let vertices;
+  let waypoints;
+  let snap;
   let staging;
   try {
     vertices = parseRouteVertices(b.vertices);
+    waypoints = serializeRouteWaypoints(b.waypoints);
+    snap = b.snap === undefined ? false : parseRouteSnap(b.snap);
     staging = parseRouteStaging(b.staging);
   } catch (err) {
     return res.status(400).json({ error: (err as Error).message });
@@ -949,9 +953,9 @@ app.post('/api/routes', (req, res) => {
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
   db.handle
-    .prepare('INSERT INTO routes (id, owner_id, name, notes, access, type, vertices, staging, visibility, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+    .prepare('INSERT INTO routes (id, owner_id, name, notes, access, type, vertices, waypoints, snap, staging, visibility, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
     .run(id, req.user!.id, b.name.trim(), String(b.notes ?? ''), String(b.access ?? ''), type,
-      JSON.stringify(vertices), staging ? JSON.stringify(staging) : null, visibility, now, now);
+      JSON.stringify(vertices), waypoints, snap ? 1 : 0, staging ? JSON.stringify(staging) : null, visibility, now, now);
   res.status(201).json(routeJson(db.handle.prepare('SELECT * FROM routes WHERE id = ?').get(id) as unknown as RouteRow));
 });
 
@@ -967,9 +971,13 @@ app.patch('/api/routes/:id', (req, res) => {
   if (!canEdit(row.owner_id, req.user)) return res.status(403).json({ error: 'Forbidden' });
   const b = req.body as Record<string, unknown>;
   let vertices = row.vertices;
+  let waypoints = row.waypoints;
+  let snap = !!row.snap;
   let staging = row.staging;
   try {
     if (b.vertices !== undefined) vertices = JSON.stringify(parseRouteVertices(b.vertices));
+    if (b.waypoints !== undefined) waypoints = serializeRouteWaypoints(b.waypoints);
+    if (b.snap !== undefined) snap = parseRouteSnap(b.snap);
     if (b.staging !== undefined) {
       const parsed = parseRouteStaging(b.staging);
       staging = parsed ? JSON.stringify(parsed) : null;
@@ -983,12 +991,14 @@ app.patch('/api/routes/:id', (req, res) => {
     access: typeof b.access === 'string' ? b.access : row.access,
     type: isRouteType(b.type) ? b.type : row.type,
     vertices,
+    waypoints,
+    snap,
     staging,
     visibility: isVisibility(b.visibility) ? b.visibility : row.visibility,
   };
   db.handle
-    .prepare('UPDATE routes SET name=?, notes=?, access=?, type=?, vertices=?, staging=?, visibility=?, updated_at=? WHERE id=?')
-    .run(next.name, next.notes, next.access, next.type, next.vertices, next.staging, next.visibility, new Date().toISOString(), row.id);
+    .prepare('UPDATE routes SET name=?, notes=?, access=?, type=?, vertices=?, waypoints=?, snap=?, staging=?, visibility=?, updated_at=? WHERE id=?')
+    .run(next.name, next.notes, next.access, next.type, next.vertices, next.waypoints, next.snap ? 1 : 0, next.staging, next.visibility, new Date().toISOString(), row.id);
   res.json(routeJson(db.handle.prepare('SELECT * FROM routes WHERE id = ?').get(row.id) as unknown as RouteRow));
 });
 

@@ -146,6 +146,10 @@ export interface Route {
   type: RouteType;
   /** Ordered [lng, lat] coordinate pairs. */
   vertices: [number, number][];
+  /** Original click locations used to reconstruct a snapped route. */
+  waypoints?: [number, number][];
+  /** Whether to follow roads between saved waypoints. */
+  snap?: boolean;
   /** Optional off-route staging location; used as planning anchor if present. */
   staging: { lat: number; lng: number } | null;
   visibility: Visibility;

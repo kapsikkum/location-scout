@@ -28,8 +28,9 @@ import SpotPanel from '../components/SpotPanel.js';
 import SpotEditor, { SpotDraft } from '../components/SpotEditor.js';
 import PlaceEditor, { draftToPlace, PlaceDraft, placeToDraft } from '../components/PlaceEditor.js';
 import RouteEditor, { blankRouteDraft, draftToRoute, RouteDraft, routeToDraft } from '../components/RouteEditor.js';
-import { snapLeg } from '../map/routeGeometry.js';
+import { fetchOsrmFullRoute, routeDistanceKm, routeStops, routingWaypoints } from '../map/routeGeometry.js';
 import { updateRoutes, stepRouteDashAnimation, ROUTE_LINE_LAYER } from '../map/routeLayer.js';
+import { RouteWaypointMarkers } from '../map/routeWaypointMarkers.js';
 import { emptyGoodTimes } from '../components/GoodTimesEditor.js';
 import DayStrip from '../components/DayStrip.js';
 import SunBearingPlanner from '../components/SunBearingPlanner.js';
@@ -70,6 +71,8 @@ const newSpot = (lat: number, lng: number, placeId: string | null = null): SpotD
 /** Legend keys whose visibility is applied by their own effect below. */
 const FEED_KEYS = ['imagery', 'planes', 'rail', 'trains', 'candidates', 'weather', 'fires', 'cameras'];
 const RADAR_POLL_MS = 10 * 60_000;
+
+type RouteHistoryEntry = { draft: RouteDraft; duration: number | null; ready: boolean };
 
 export default function MapPage({ user }: { user: User | null }) {
   const container = useRef<HTMLDivElement>(null);
@@ -441,6 +444,149 @@ export default function MapPage({ user }: { user: User | null }) {
   const routeDraft = editing?.type === 'route' ? editing.draft : null;
   const routeDraftRef = useRef<RouteDraft | null>(null);
   routeDraftRef.current = routeDraft;
+  const routeOriginal = useRef<RouteDraft | null>(null);
+  const routeDraftDirty = useRef(false);
+  const [routeRecovered, setRouteRecovered] = useState(false);
+  const [routeRouting, setRouteRouting] = useState({ busy: false, error: '' });
+  const routeRoutingRef = useRef(routeRouting);
+  routeRoutingRef.current = routeRouting;
+  const [routeDuration, setRouteDuration] = useState<number | null>(null);
+  const routeDurationRef = useRef<number | null>(null);
+  routeDurationRef.current = routeDuration;
+  const routeHistory = useRef<{ undo: RouteHistoryEntry[]; redo: RouteHistoryEntry[] }>({ undo: [], redo: [] });
+  const [, setRouteHistoryVersion] = useState(0);
+  const routeRequest = useRef(0);
+  const routeSession = useRef(0);
+  const draftKey = (id?: string) => `ls.routeDraft.${user?.id ?? 'anon'}.${id ?? 'new'}`;
+
+  /** Forget the stored draft and any in-flight routing for an edit that ended. */
+  function discardRouteDraft(id?: string) {
+    try { localStorage.removeItem(draftKey(id)); } catch { /* storage may be disabled */ }
+    routeDraftDirty.current = false;
+    ++routeSession.current;
+    ++routeRequest.current;
+  }
+
+  function setRouteDraft(draft: RouteDraft) {
+    routeDraftDirty.current = true;
+    routeDraftRef.current = draft;
+    setEditing({ type: 'route', draft });
+  }
+
+  function setRouting(busy: boolean, error = '') {
+    routeRoutingRef.current = { busy, error };
+    setRouteRouting({ busy, error });
+  }
+
+  function setDuration(seconds: number | null) {
+    routeDurationRef.current = seconds;
+    setRouteDuration(seconds);
+  }
+
+  function rememberRoute() {
+    const draft = routeDraftRef.current;
+    if (!draft) return;
+    routeHistory.current.undo.push({ draft, duration: routeDurationRef.current, ready: !routeRoutingRef.current.busy && !routeRoutingRef.current.error });
+    routeHistory.current.redo = [];
+    setRouteHistoryVersion((value) => value + 1);
+  }
+
+  function calculateRoute(draft: RouteDraft) {
+    const request = ++routeRequest.current;
+    const session = routeSession.current;
+    const waypoints = draft.waypoints ?? draft.vertices;
+    if (!draft.snap || waypoints.length < 2) {
+      setRouting(false);
+      setDuration(null);
+      setRouteDraft({ ...draft, vertices: waypoints });
+      return;
+    }
+    setRouting(true);
+    void fetchOsrmFullRoute(routingWaypoints(waypoints, draft.type)).then((result) => {
+      if (request !== routeRequest.current || session !== routeSession.current) return;
+      if (!result) {
+        setRouting(false, 'Could not calculate a road route. Check the stops and retry.');
+        return;
+      }
+      const current = routeDraftRef.current;
+      if (!current) return;
+      setRouteDraft({ ...current, vertices: result.coordinates });
+      setDuration(result.durationSeconds);
+      setRouting(false);
+    });
+  }
+
+  function changeRouteWaypoints(waypoints: [number, number][]) {
+    const current = routeDraftRef.current;
+    if (!current) return;
+    rememberRoute();
+    const next = { ...current, waypoints, ...(!current.snap ? { vertices: waypoints } : {}) };
+    setRouteDraft(next);
+    calculateRoute(next);
+  }
+
+  function changeRouteDraft(next: RouteDraft) {
+    const current = routeDraftRef.current;
+    if (!current) return;
+    if (next.snap !== current.snap || next.type !== current.type) {
+      rememberRoute();
+      if (!next.snap && !current.snap) {
+        setRouteDraft(next);
+        return;
+      }
+      const changed = { ...next, waypoints: next.waypoints ?? routeStops(current) };
+      setRouteDraft(changed);
+      calculateRoute(changed);
+    } else {
+      setRouteDraft(next);
+    }
+  }
+
+  function travelHistory(direction: 'undo' | 'redo') {
+    const from = routeHistory.current[direction];
+    const entry = from.pop();
+    const current = routeDraftRef.current;
+    if (!entry || !current) return;
+    routeHistory.current[direction === 'undo' ? 'redo' : 'undo'].push({ draft: current, duration: routeDurationRef.current, ready: !routeRoutingRef.current.busy && !routeRoutingRef.current.error });
+    ++routeRequest.current;
+    setRouteDraft(entry.draft);
+    setDuration(entry.duration);
+    setRouting(false);
+    if (!entry.ready) calculateRoute(entry.draft);
+    setRouteHistoryVersion((value) => value + 1);
+  }
+
+  function openRouteEdit(draft: RouteDraft) {
+    setStagingMode(false);
+    ++routeSession.current;
+    ++routeRequest.current;
+    routeHistory.current = { undo: [], redo: [] };
+    setRouteHistoryVersion((value) => value + 1);
+    setRouting(false);
+    setDuration(null);
+    routeOriginal.current = draft;
+    routeDraftDirty.current = false;
+    setRouteRecovered(false);
+    try {
+      const saved = JSON.parse(localStorage.getItem(draftKey(draft.id)) ?? 'null') as RouteDraft | null;
+      if (saved && saved.id === draft.id && saved.updatedAt === draft.updatedAt && Array.isArray(saved.vertices) &&
+          (saved.waypoints === undefined || Array.isArray(saved.waypoints))) {
+        draft = saved;
+        routeDraftDirty.current = true;
+        setRouteRecovered(true);
+      }
+    } catch { /* storage may be disabled */ }
+    routeDraftRef.current = draft;
+    setEditing({ type: 'route', draft });
+    if (routeDraftDirty.current && draft.snap && (draft.waypoints?.length ?? 0) >= 2) calculateRoute(draft);
+    setSelected(null);
+    setMode('draw');
+  }
+
+  useEffect(() => {
+    if (!routeDraft || !routeDraftDirty.current) return;
+    try { localStorage.setItem(draftKey(routeDraft.id), JSON.stringify(routeDraft)); } catch { /* storage may be disabled */ }
+  }, [routeDraft]);
   const cursorState = useRef({ mode, snap: false });
   cursorState.current = { mode, snap: !!routeDraft?.snap };
   const spotDraft = editing?.type === 'spot' ? editing.draft : null;
@@ -568,6 +714,24 @@ export default function MapPage({ user }: { user: User | null }) {
   }, [map, placeDraft, mode]);
   useEffect(() => () => vertexMarkers.current.clear(), [map]);
 
+  const routeWaypointMarkers = useRef(new RouteWaypointMarkers());
+  useEffect(() => {
+    if (!map) return;
+    routeWaypointMarkers.current.update(
+      map,
+      routeDraft ? routeStops(routeDraft) : [],
+      mode === 'draw' && !!routeDraft,
+      (index, at) => {
+        const draft = routeDraftRef.current;
+        if (!draft) return;
+        const stops = routeStops(draft).slice();
+        stops[index] = at;
+        changeRouteWaypoints(stops);
+      },
+    );
+  }, [map, routeDraft, mode]);
+  useEffect(() => () => routeWaypointMarkers.current.clear(), [map]);
+
   // --- clicks ---
   const onClick = useRef<(e: MapMouseEvent) => void>(() => {});
   onClick.current = (e) => {
@@ -594,14 +758,25 @@ export default function MapPage({ user }: { user: User | null }) {
       return;
     }
     if (mode === 'draw' && routeDraftRef.current) {
-      const draft = routeDraftRef.current, to: [number, number] = [lng, lat], last = draft.vertices.at(-1);
-      const add = (d: RouteDraft, pts: [number, number][]) => {
-        const vertices = [...d.vertices, ...pts];
-        setEditing({ type: 'route', draft: { ...d, vertices, clickEnds: [...(d.clickEnds ?? []), vertices.length] } });
-      };
-      if (!draft.snap || !last) { add(draft, [to]); return; }
-      // Follows the road from the last point; applied to the latest draft in case it changed while routing.
-      void snapLeg(last, to).then((pts) => { const d = routeDraftRef.current; if (d && d.vertices.at(-1) === last) add(d, pts); });
+      const draft = routeDraftRef.current, to: [number, number] = [lng, lat];
+      const stops = routeStops(draft);
+
+      // Clicking on the drawn line inserts a stop there. Only when the line is the straight stop-to-stop one (snap off);
+      // a routed road can't be hit-tested per leg, so with snapping a click always appends.
+      const inserted = !draft.snap && stops.length >= 2 && stops.length === draft.vertices.length ? insertVertexOnNearestSegment(stops, 'line', e.point, {
+        project: (at) => map.project(at),
+        unproject: (point) => {
+          const ll = map.unproject([point.x, point.y]);
+          return [ll.lng, ll.lat];
+        },
+        tolerancePx: 12,
+      }) : null;
+
+      if (inserted) {
+        changeRouteWaypoints(inserted.coords);
+        return;
+      }
+      changeRouteWaypoints([...stops, to]);
       return;
     }
     if (mode === 'draw' && placeDraft) {
@@ -753,14 +928,18 @@ export default function MapPage({ user }: { user: User | null }) {
   }
 
   async function saveRoute(d: RouteDraft) {
+    if (routeRoutingRef.current.busy || routeRoutingRef.current.error) throw new Error('Wait for the road route or retry it before saving.');
     const body = draftToRoute(d);
     const saved = d.id ? await api.updateRoute(d.id, body) : await api.createRoute(body);
+    discardRouteDraft(d.id);
     await reload(); setEditing(null); setMode('browse'); setSelected({ type: 'route', id: saved.id });
   }
 
   async function deleteRoute(r: Route) {
     if (!confirm(`Delete \"${r.name}\"?`)) return;
-    await api.deleteRoute(r.id); setSelected(null); await reload();
+    await api.deleteRoute(r.id);
+    if (routeDraftRef.current?.id === r.id) { discardRouteDraft(r.id); setEditing(null); setMode('browse'); }
+    setSelected(null); await reload();
   }
 
   async function deleteSpot(s: Spot) {
@@ -788,6 +967,8 @@ export default function MapPage({ user }: { user: User | null }) {
   }
 
   function cancelEdit() {
+    setStagingMode(false);
+    if (routeDraftRef.current) discardRouteDraft(routeDraftRef.current.id);
     setEditing(null);
     setMode('browse');
   }
@@ -858,7 +1039,7 @@ export default function MapPage({ user }: { user: User | null }) {
           <>
             <button className={`chip${mode === 'pick-spot' ? ' active' : ''}`} onClick={() => setMode(mode === 'pick-spot' ? 'browse' : 'pick-spot')}>+ Spot</button>
             <button className="chip" onClick={() => { setSelected(null); setEditing({ type: 'spot', draft: newSpot(centre.lat, centre.lng) }); }}>+ Spot here</button>
-            <button className="chip" onClick={() => { setSelected(null); setEditing({ type: 'route', draft: blankRouteDraft() }); setMode('draw'); }}>+ Route</button>
+            <button className="chip" onClick={() => openRouteEdit(blankRouteDraft())}>+ Route</button>
             <button className="chip" onClick={() => {
               setSelected(null);
               setEditing({ type: 'place', draft: { name: '', notes: '', access: '', visibility: 'private', lat: centre.lat, lng: centre.lng, kind: 'polygon', coords: [] } });
@@ -897,10 +1078,43 @@ export default function MapPage({ user }: { user: User | null }) {
               onChange={(draft) => setEditing({ type: 'spot', draft })} onSave={() => saveSpot(editing.draft)} onCancel={cancelEdit} />
           )}
           {editing?.type === 'route' && (
-            <RouteEditor draft={editing.draft} drawing={mode === 'draw'} stagingMode={stagingMode}
-              onDrawing={(on) => { setMode(on ? 'draw' : 'browse'); if (on) setStagingMode(false); }} onStagingMode={setStagingMode}
-              onChange={(draft) => setEditing({ type: 'route', draft })} onSave={() => saveRoute(editing.draft)} onCancel={cancelEdit}
-              onDelete={editing.draft.id ? () => void deleteRoute({ ...draftToRoute(editing.draft), id: editing.draft.id, ownerId: '', createdAt: '', updatedAt: '' } as Route) : undefined} />
+            <>
+            {routeRecovered && <div className="hint" role="status">Recovered your unsaved route draft. <button type="button" onClick={() => {
+              try { localStorage.removeItem(draftKey(editing.draft.id)); } catch { /* storage may be disabled */ }
+              ++routeRequest.current;
+              routeHistory.current = { undo: [], redo: [] };
+              setRouteHistoryVersion((value) => value + 1);
+              routeDraftDirty.current = false;
+              setRouteRecovered(false);
+              setRouting(false);
+              setDuration(null);
+              if (routeOriginal.current) {
+                routeDraftRef.current = routeOriginal.current;
+                setEditing({ type: 'route', draft: routeOriginal.current });
+              }
+            }}>Discard draft</button></div>}
+            <RouteEditor
+              draft={editing.draft}
+              drawing={mode === 'draw'}
+              stagingMode={stagingMode}
+              time={time}
+              onDrawing={(on) => { setMode(on ? 'draw' : 'browse'); if (on) setStagingMode(false); }}
+              onStagingMode={setStagingMode}
+              onChange={changeRouteDraft}
+              onWaypointsChange={changeRouteWaypoints}
+              routingBusy={routeRouting.busy}
+              routingError={routeRouting.error}
+              onRetryRouting={() => { const draft = routeDraftRef.current; if (draft) calculateRoute(draft); }}
+              routeDurationSec={routeDuration}
+              onUndo={() => travelHistory('undo')}
+              onRedo={() => travelHistory('redo')}
+              canUndo={routeHistory.current.undo.length > 0}
+              canRedo={routeHistory.current.redo.length > 0}
+              onSave={() => saveRoute(editing.draft)}
+              onCancel={cancelEdit}
+              onDelete={editing.draft.id ? () => void deleteRoute({ ...draftToRoute(editing.draft), id: editing.draft.id, ownerId: '', createdAt: '', updatedAt: '' } as Route) : undefined}
+            />
+            </>
           )}
           {editing?.type === 'place' && (
             <PlaceEditor draft={editing.draft} drawing={mode === 'draw'} onDrawing={(on) => setMode(on ? 'draw' : 'browse')}
@@ -958,11 +1172,11 @@ export default function MapPage({ user }: { user: User | null }) {
           {!editing && selectedRoute && (
             <>
               <h2>{selectedRoute.name}</h2>
-              <p className="hint">{selectedRoute.type} · {selectedRoute.vertices.length} point{selectedRoute.vertices.length === 1 ? '' : 's'} · {selectedRoute.visibility}</p>
+              <p className="hint">{selectedRoute.type === 'circuit' ? 'Circuit' : 'Sprint'} · {selectedRoute.waypoints ? `${selectedRoute.waypoints.length} stops` : 'Saved path'} · {routeDistanceKm(selectedRoute.vertices, selectedRoute.type).toFixed(1)} km · {selectedRoute.visibility}</p>
               {selectedRoute.notes && <p className="panel__notes">{selectedRoute.notes}</p>}
               <div className="panel__actions">
                 <Link to={`/plan?route=${selectedRoute.id}`}><button>Plan shoot</button></Link>
-                {canEdit(selectedRoute.ownerId) && <><button className="primary" onClick={() => { setEditing({ type: 'route', draft: routeToDraft(selectedRoute) }); setMode('draw'); }}>Edit</button><button onClick={() => void deleteRoute(selectedRoute)}>Delete</button></>}
+                {canEdit(selectedRoute.ownerId) && <><button className="primary" onClick={() => openRouteEdit(routeToDraft(selectedRoute))}>Edit</button><button onClick={() => void deleteRoute(selectedRoute)}>Delete</button></>}
               </div>
             </>
           )}
