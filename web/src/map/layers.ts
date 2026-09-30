@@ -16,6 +16,7 @@ import { registerTerrainShadowProtocol, setBuildingShadows, setTerrainShadowSun,
 import { RADAR_MAX_NATIVE_Z } from './weather.js';
 import { moodAt, moonPos, sunPos, sunriseSunset } from './sun.js';
 import { SELECTED_BEARING_PROJECTION_SOURCE } from './sunAnchor.js';
+import { initRouteLayers } from './routeLayer.js';
 
 export const STYLE_URL = 'https://tiles.openfreemap.org/styles/liberty';
 export const ESRI = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}';
@@ -111,6 +112,9 @@ export function initLayers(map: MlMap) {
   map.addLayer({ id: 'draft-line', type: 'line', source: 'draft', filter: ['!=', ['geometry-type'], 'Point'], paint: { 'line-color': '#4ade80', 'line-width': 2, 'line-dasharray': [2, 1] } });
   map.addLayer({ id: 'draft-pts', type: 'circle', source: 'draft', filter: ['==', ['geometry-type'], 'Point'],
     paint: { 'circle-radius': 5, 'circle-color': '#4ade80', 'circle-stroke-color': '#0e1014', 'circle-stroke-width': 2 } });
+
+  // Persisted route overlays live above the base style and below map labels.
+  initRouteLayers(map, firstSymbol);
 
   map.addSource('place-points', { type: 'geojson', data: empty() });
   map.addLayer({ id: 'place-points', type: 'circle', source: 'place-points', maxzoom: CHILD_SPOT_ZOOM,
@@ -486,7 +490,7 @@ function cameraIcon(): ImageData {
   return g.getImageData(0, 0, 44, 44);
 }
 
-export const CLICKABLE = ['spot-thumbs', 'place-spot-thumbs', 'spot-points', 'place-spots', 'clusters', 'place-points', 'place-fill', 'place-line', 'candidates', 'fires-pts', 'fires-polys-fill', 'fires-polys-line', 'cameras'];
+export const CLICKABLE = ['spot-thumbs', 'place-spot-thumbs', 'spot-points', 'place-spots', 'clusters', 'place-points', 'place-fill', 'place-line', 'candidates', 'fires-pts', 'fires-polys-fill', 'fires-polys-line', 'cameras', 'route-lines', 'route-staging'];
 
 export function setImagery(map: MlMap, on: boolean) {
   map.setLayoutProperty('imagery', 'visibility', on ? 'visible' : 'none');

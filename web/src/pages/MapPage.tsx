@@ -3,7 +3,7 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { GeoJSONSource, LngLatBounds, Map as MlMap, MapMouseEvent, Marker, NavigationControl, Popup, ScaleControl, setWorkerUrl } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
-import { api, Candidate, FireIncident, Place, Plane, type PlaneInfo, Spot, type TrafficCamera, TrainPosition, User, type WeatherForecast } from '../api.js';
+import { api, Candidate, FireIncident, Place, Plane, type PlaneInfo, Route, Spot, type TrafficCamera, TrainPosition, User, type WeatherForecast } from '../api.js';
 import { hourAt, pickRadarFrame, RAINVIEWER_INDEX, radarTileUrl, weatherIcon, type RadarIndex } from '../map/weather.js';
 import {
   CLICKABLE, initFeedLayers, initLayers, PLANE_LAYERS, setImagery, setLayerVisible, setTerrain3d, STYLE_URL, updateCandidates, updateDraft,
@@ -26,6 +26,8 @@ import TimeBar from '../components/TimeBar.js';
 import SpotPanel from '../components/SpotPanel.js';
 import SpotEditor, { SpotDraft } from '../components/SpotEditor.js';
 import PlaceEditor, { draftToPlace, PlaceDraft, placeToDraft } from '../components/PlaceEditor.js';
+import RouteEditor, { blankRouteDraft, draftToRoute, RouteDraft, routeToDraft } from '../components/RouteEditor.js';
+import { updateRoutes, stepRouteDashAnimation, ROUTE_LINE_LAYER } from '../map/routeLayer.js';
 import { emptyGoodTimes } from '../components/GoodTimesEditor.js';
 import DayStrip from '../components/DayStrip.js';
 import SunBearingPlanner from '../components/SunBearingPlanner.js';
@@ -41,8 +43,8 @@ import {
 } from '../map/sunAnchor.js';
 import { insertVertexOnNearestSegment, moveOutlineVertex, PlaceOutlineVertexMarkers } from '../map/placeOutlineEdit.js';
 
-type Selection = { type: 'spot' | 'place' | 'candidate'; id: string } | null;
-type Editing = { type: 'spot'; draft: SpotDraft } | { type: 'place'; draft: PlaceDraft } | null;
+type Selection = { type: 'spot' | 'place' | 'candidate' | 'route'; id: string } | null;
+type Editing = { type: 'spot'; draft: SpotDraft } | { type: 'place'; draft: PlaceDraft } | { type: 'route'; draft: RouteDraft } | null;
 const TRAINS_POLL_MS = 20_000; // matches the server's realtime cache
 /** Follow mode re-centres the camera this often, with a linear ease of the same length so the motion is continuous. */
 const FOLLOW_EASE_MS = 1000;
@@ -72,9 +74,11 @@ export default function MapPage({ user }: { user: User | null }) {
   const [map, setMap] = useState<MlMap | null>(null);
   const [places, setPlaces] = useState<Place[]>([]);
   const [spots, setSpots] = useState<Spot[]>([]);
+  const [routes, setRoutes] = useState<Route[]>([]);
   const [error, setError] = useState('');
   const [selected, setSelected] = useState<Selection>(null);
   const [editing, setEditing] = useState<Editing>(null);
+  const [stagingMode, setStagingMode] = useState(false);
   const [mode, setMode] = useState<'browse' | 'pick-spot' | 'draw' | 'anchor'>('browse');
   const [sunAnchor, setSunAnchor] = useState<Coordinate | null>(null);
   const [sunAnchorBearing, setSunAnchorBearing] = useState<number | null>(null);
@@ -109,6 +113,7 @@ export default function MapPage({ user }: { user: User | null }) {
   const { planes: planesOn, rail: railOn, trains: trainsOn, candidates: candidatesOn, imagery, weather: weatherOn, fires: firesOn, cameras: camerasOn } = vis;
   const railEffectiveOn = effectiveRailOn(railOn, trainsOn);
   const baseRailPaint = useRef<BaseRailPaintSnapshot[] | null>(null);
+  const routesOn = vis.routes;
   const [rail, setRail] = useState<GeoJSON.FeatureCollection | null>(null);
   const [candidates, setCandidates] = useState<Candidate[]>([]);
   const [fires, setFires] = useState<FireIncident[]>([]);
@@ -128,8 +133,9 @@ export default function MapPage({ user }: { user: User | null }) {
 
   const canEdit = (ownerId: string) => !!user && (user.role === 'admin' || user.id === ownerId);
 
-  const reload = () => Promise.all([api.places(), api.spots()])
-    .then(([p, s]) => { setPlaces(p); setSpots(s); })
+  const routeDashState = useRef({ phase: 0 });
+  const reload = () => Promise.all([api.places(), api.spots(), api.routes()])
+    .then(([p, s, r]) => { setPlaces(p); setSpots(s); setRoutes(r); })
     .catch((err) => setError((err as Error).message));
 
   // --- map lifecycle ---
@@ -326,6 +332,7 @@ export default function MapPage({ user }: { user: User | null }) {
           return pose ? { ...p, lat: pose.lat, lon: pose.lng } : p;
         }), planeExtras.current.sun);
       }
+      stepRouteDashAnimation(map, routeDashState.current, 0.01, sunPos(timeRef.current, map.getCenter().lat, map.getCenter().lng).altitude, now);
       if (trains.length && !hiddenLayers.has('trains')) {
         const moved = trains.map((t) => ({ t, pose: trainMotion.current.pose(t.tripId, now) }));
         updateTrains(map, moved.map(({ t, pose }) => (pose ? { ...t, lat: pose.lat, lng: pose.lng } : t)));
@@ -428,6 +435,10 @@ export default function MapPage({ user }: { user: User | null }) {
   const selectedSpot = selected?.type === 'spot' ? spots.find((s) => s.id === selected.id) : undefined;
   const selectedPlace = selected?.type === 'place' ? places.find((p) => p.id === selected.id) : undefined;
   const selectedCandidate = selected?.type === 'candidate' ? candidates.find((c) => c.id === selected.id) : undefined;
+  const selectedRoute = selected?.type === 'route' ? routes.find((r) => r.id === selected.id) : undefined;
+  const routeDraft = editing?.type === 'route' ? editing.draft : null;
+  const routeDraftRef = useRef<RouteDraft | null>(null);
+  routeDraftRef.current = routeDraft;
   const spotDraft = editing?.type === 'spot' ? editing.draft : null;
 
   const timeKey = Math.floor(time.getTime() / 300_000); // "good" needn't be redone more often than the slider's step
@@ -447,6 +458,13 @@ export default function MapPage({ user }: { user: User | null }) {
   useEffect(() => {
     if (map) updateWedges(map, shownSpots, (s) => goodNow(s, time), highlight);
   }, [view]);
+
+  useEffect(() => {
+    if (!map) return;
+    const draft = routeDraft ? draftToRoute(routeDraft) as Route : null;
+    const shown = draft ? (routeDraft?.id ? routes.map((r) => r.id === routeDraft.id ? draft : r) : [...routes, draft]) : routes;
+    updateRoutes(map, shown, routeDraft?.id ?? selectedRoute?.id ?? null);
+  }, [map, routes, routeDraft, selectedRoute?.id]);
 
   const displayOrigin = resolveDisplayOrigin({
     sunAnchor,
@@ -552,12 +570,22 @@ export default function MapPage({ user }: { user: User | null }) {
       setMode(placement.nextMode ?? 'browse');
       return;
     }
+    if (stagingMode && routeDraftRef.current) {
+      setEditing({ type: 'route', draft: { ...routeDraftRef.current, staging: { lat, lng } } });
+      setStagingMode(false);
+      return;
+    }
     if (mode === 'pick-spot') {
       setMode('browse');
 
       setSelected(null);
       setEditing({ type: 'spot', draft: newSpot(lat, lng) });
       focus(lng, lat);
+      return;
+    }
+    if (mode === 'draw' && routeDraftRef.current) {
+      const draft = routeDraftRef.current;
+      setEditing({ type: 'route', draft: { ...draft, vertices: [...draft.vertices, [lng, lat] as [number, number]] } });
       return;
     }
     if (mode === 'draw' && placeDraft) {
@@ -610,6 +638,8 @@ export default function MapPage({ user }: { user: User | null }) {
       setSelected({ type: 'spot', id });
       const [lng, lat] = (hit.geometry as GeoJSON.Point).coordinates;
       focus(lng, lat);
+    } else if (hit.layer.id === ROUTE_LINE_LAYER || hit.layer.id === 'route-staging') {
+      setSelected({ type: 'route', id: hit.properties?.routeId as string });
     } else if (hit.layer.id === 'candidates') {
       setSelected({ type: 'candidate', id });
       const [lng, lat] = (hit.geometry as GeoJSON.Point).coordinates;
@@ -670,6 +700,17 @@ export default function MapPage({ user }: { user: User | null }) {
     setSelected({ type: 'place', id: saved.id });
   }
 
+  async function saveRoute(d: RouteDraft) {
+    const body = draftToRoute(d);
+    const saved = d.id ? await api.updateRoute(d.id, body) : await api.createRoute(body);
+    await reload(); setEditing(null); setMode('browse'); setSelected({ type: 'route', id: saved.id });
+  }
+
+  async function deleteRoute(r: Route) {
+    if (!confirm(`Delete \"${r.name}\"?`)) return;
+    await api.deleteRoute(r.id); setSelected(null); await reload();
+  }
+
   async function deleteSpot(s: Spot) {
     if (!confirm(`Delete "${s.name}" and its photos?`)) return;
     await api.deleteSpot(s.id);
@@ -705,7 +746,7 @@ export default function MapPage({ user }: { user: User | null }) {
     setSelected({ type: 'spot', id: spot.id });
   }
 
-  const panelOpen = !!editing || !!selectedSpot || !!selectedPlace || !!selectedCandidate || shouldShowSunPlanner(sunAnchor, null);
+  const panelOpen = !!editing || !!selectedSpot || !!selectedPlace || !!selectedCandidate || !!selectedRoute || shouldShowSunPlanner(sunAnchor, null);
   const placeSpots = selectedPlace ? spots.filter((s) => s.placeId === selectedPlace.id) : [];
   const selectedSunBearing = selectedSpot ? resolveSunPlannerBearing(selectedSpot, sunAnchor, sunAnchorBearing) : null;
 
@@ -728,7 +769,7 @@ export default function MapPage({ user }: { user: User | null }) {
             ? 'Click the map to place the spot'
             : mode === 'anchor'
             ? 'Click the map to place the sun anchor'
-            : 'Click the map to add or edit outline points'}
+            : 'Click the map to add or edit points'}
         </div>
       )}
 
@@ -760,10 +801,12 @@ export default function MapPage({ user }: { user: User | null }) {
         <button className={`chip${weatherOn ? ' active' : ''}`} onClick={() => toggle('weather')} title="Rain radar (RainViewer, recent past only) and the forecast at the map centre for the map time"><Swatch cat={category('weather')} />{category('weather').label}</button>
         <button className={`chip${candidatesOn ? ' active' : ''}`} onClick={() => toggle('candidates')} title="OpenStreetMap viewpoints, ruins and other candidates"><Swatch cat={category('candidates')} />{category('candidates').label}</button>
         <button className={`chip${camerasOn ? ' active' : ''}`} onClick={() => toggle('cameras')} title="NSW live traffic cameras (TfNSW)"><Swatch cat={category('cameras')} />{category('cameras').label}</button>
+        <button className={`chip${routesOn ? ' active' : ''}`} onClick={() => toggle('routes')} title="Show or hide saved routes"><Swatch cat={category('routes')} />{category('routes').label}</button>
         {user && !editing && (
           <>
             <button className={`chip${mode === 'pick-spot' ? ' active' : ''}`} onClick={() => setMode(mode === 'pick-spot' ? 'browse' : 'pick-spot')}>+ Spot</button>
             <button className="chip" onClick={() => { setSelected(null); setEditing({ type: 'spot', draft: newSpot(centre.lat, centre.lng) }); }}>+ Spot here</button>
+            <button className="chip" onClick={() => { setSelected(null); setEditing({ type: 'route', draft: blankRouteDraft() }); setMode('draw'); }}>+ Route</button>
             <button className="chip" onClick={() => {
               setSelected(null);
               setEditing({ type: 'place', draft: { name: '', notes: '', access: '', visibility: 'private', lat: centre.lat, lng: centre.lng, kind: 'polygon', coords: [] } });
@@ -800,6 +843,12 @@ export default function MapPage({ user }: { user: User | null }) {
           {editing?.type === 'spot' && (
             <SpotEditor key={editing.draft.id ?? 'new'} map={map} draft={editing.draft} places={places}
               onChange={(draft) => setEditing({ type: 'spot', draft })} onSave={() => saveSpot(editing.draft)} onCancel={cancelEdit} />
+          )}
+          {editing?.type === 'route' && (
+            <RouteEditor draft={editing.draft} drawing={mode === 'draw'} stagingMode={stagingMode}
+              onDrawing={(on) => { setMode(on ? 'draw' : 'browse'); if (on) setStagingMode(false); }} onStagingMode={setStagingMode}
+              onChange={(draft) => setEditing({ type: 'route', draft })} onSave={() => saveRoute(editing.draft)} onCancel={cancelEdit}
+              onDelete={editing.draft.id ? () => void deleteRoute({ ...draftToRoute(editing.draft), id: editing.draft.id, ownerId: '', createdAt: '', updatedAt: '' } as Route) : undefined} />
           )}
           {editing?.type === 'place' && (
             <PlaceEditor draft={editing.draft} drawing={mode === 'draw'} onDrawing={(on) => setMode(on ? 'draw' : 'browse')}
@@ -851,6 +900,17 @@ export default function MapPage({ user }: { user: User | null }) {
                   <button className="primary" onClick={() => setEditing({ type: 'place', draft: placeToDraft(selectedPlace) })}>Edit</button>
                   <button onClick={() => { setSelected(null); setEditing({ type: 'spot', draft: newSpot(selectedPlace.lat, selectedPlace.lng, selectedPlace.id) }); }}>+ Spot in place</button>
                 </>}
+              </div>
+            </>
+          )}
+          {!editing && selectedRoute && (
+            <>
+              <h2>{selectedRoute.name}</h2>
+              <p className="hint">{selectedRoute.type} · {selectedRoute.vertices.length} point{selectedRoute.vertices.length === 1 ? '' : 's'} · {selectedRoute.visibility}</p>
+              {selectedRoute.notes && <p className="panel__notes">{selectedRoute.notes}</p>}
+              <div className="panel__actions">
+                <Link to={`/plan?route=${selectedRoute.id}`}><button>Plan shoot</button></Link>
+                {canEdit(selectedRoute.ownerId) && <><button className="primary" onClick={() => { setEditing({ type: 'route', draft: routeToDraft(selectedRoute) }); setMode('draw'); }}>Edit</button><button onClick={() => void deleteRoute(selectedRoute)}>Delete</button></>}
               </div>
             </>
           )}
