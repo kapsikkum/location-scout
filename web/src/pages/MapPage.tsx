@@ -31,8 +31,8 @@ import SpotEditor, { SpotDraft } from '../components/SpotEditor.js';
 import PlaceEditor, { draftToPlace, PlaceDraft, placeToDraft } from '../components/PlaceEditor.js';
 import RouteEditor, { blankRouteDraft, draftToRoute, RouteDraft, routeToDraft } from '../components/RouteEditor.js';
 import { fetchOsrmFullRoute, routeDistanceKm, routeStops, routingWaypoints } from '../map/routeGeometry.js';
-import { updateRoutes, stepRouteDashAnimation, ROUTE_LINE_LAYER } from '../map/routeLayer.js';
-import { RouteWaypointMarkers } from '../map/routeWaypointMarkers.js';
+import { updateRoutes, ROUTE_LINE_LAYER } from '../map/routeLayer.js';
+import { RouteWaypointMarkers, RouteStagingMarker } from '../map/routeWaypointMarkers.js';
 import { emptyGoodTimes } from '../components/GoodTimesEditor.js';
 import DayStrip from '../components/DayStrip.js';
 import SunBearingPlanner from '../components/SunBearingPlanner.js';
@@ -141,7 +141,6 @@ export default function MapPage({ user }: { user: User | null }) {
 
   const canEdit = (ownerId: string) => !!user && (user.role === 'admin' || user.id === ownerId);
 
-  const routeDashState = useRef({ phase: 0 });
   const reload = () => Promise.all([api.places(), api.spots(), api.routes()])
     .then(([p, s, r]) => { setPlaces(p); setSpots(s); setRoutes(r); })
     .catch((err) => setError((err as Error).message));
@@ -350,7 +349,6 @@ export default function MapPage({ user }: { user: User | null }) {
           return pose ? { ...p, lat: pose.lat, lon: pose.lng } : p;
         }), planeExtras.current.sun);
       }
-      stepRouteDashAnimation(map, routeDashState.current, 0.01, sunPos(timeRef.current, map.getCenter().lat, map.getCenter().lng).altitude, now);
       if (trains.length && !hiddenLayers.has('trains')) {
         const moved = trains.map((t) => ({ t, pose: trainMotion.current.pose(t.tripId, now) }));
         updateTrains(map, moved.map(({ t, pose }) => (pose ? { ...t, lat: pose.lat, lng: pose.lng } : t)));
@@ -624,7 +622,8 @@ export default function MapPage({ user }: { user: User | null }) {
 
   useEffect(() => {
     if (!map) return;
-    const draft = routeDraft ? draftToRoute(routeDraft) as Route : null;
+    // The meetup point is a draggable marker while editing, so keep it out of the static layer.
+    const draft = routeDraft ? { ...draftToRoute(routeDraft), staging: null } as Route : null;
     const shown = draft ? (routeDraft?.id ? routes.map((r) => r.id === routeDraft.id ? draft : r) : [...routes, draft]) : routes;
     updateRoutes(map, shown, routeDraft?.id ?? selectedRoute?.id ?? null);
   }, [map, routes, routeDraft, selectedRoute?.id]);
@@ -744,6 +743,17 @@ export default function MapPage({ user }: { user: User | null }) {
     );
   }, [map, routeDraft, mode]);
   useEffect(() => () => routeWaypointMarkers.current.clear(), [map]);
+  const routeStagingMarker = useRef(new RouteStagingMarker());
+  const stagingAt = routeDraft?.staging ? [routeDraft.staging.lng, routeDraft.staging.lat] as [number, number] : null;
+  useEffect(() => {
+    routeStagingMarker.current.update(map, stagingAt, ([lng, lat]) => {
+      const draft = routeDraftRef.current;
+      if (!draft) return;
+      rememberRoute();
+      setRouteDraft({ ...draft, staging: { lat, lng } });
+    });
+  }, [map, stagingAt?.[0], stagingAt?.[1]]);
+  useEffect(() => () => routeStagingMarker.current.clear(), [map]);
 
   // --- clicks ---
   const onClick = useRef<(e: MapMouseEvent) => void>(() => {});

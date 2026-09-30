@@ -3,9 +3,7 @@ import assert from 'node:assert/strict';
 import type { Route } from '../src/api.js';
 import {
   ROUTE_LAYERS,
-  routeDashPalette,
   routeFeatureCollections,
-  routePulseGradient,
 } from '../src/map/routeLayer.js';
 
 const route = (patch: Partial<Route>): Route => ({
@@ -58,27 +56,12 @@ test('routeFeatureCollections keeps a long route as one LineString instead of on
   assert.deepEqual(segments.features[0].geometry, { type: 'LineString', coordinates: vertices });
 });
 
-test('route animation palette changes foreground by sun altitude and keeps opposite halo contrast', () => {
-  assert.deepEqual(routeDashPalette(35), { foreground: '#111827', halo: '#fff7ed' });
-  assert.deepEqual(routeDashPalette(1), { foreground: '#fef08a', halo: '#05070f' });
-  assert.deepEqual(routeDashPalette(-12), { foreground: '#f8fafc', halo: '#05070f' });
-});
-
-test('routePulseGradient uses transparent bookends around the visible pulse', () => {
-  const gradient = routePulseGradient(0.5, '#f8fafc') as unknown[];
-  assert.equal(gradient[0], 'interpolate');
-  assert.ok(gradient.includes('#f8fafc'));
-  assert.equal(gradient[4], '#f8fafc00');
-  assert.equal(gradient.at(-1), '#f8fafc00');
-});
-
 test('ROUTE_LAYERS includes every rendered route overlay layer', () => {
   assert.deepEqual([...ROUTE_LAYERS], [
     'route-glow',
     'route-casing',
     'route-lines',
-    'route-dash-casing',
-    'route-dashes',
+    'route-arrows',
     'route-staging-halo',
     'route-staging',
   ]);

@@ -97,3 +97,34 @@ export class RouteWaypointMarkers {
     return marker;
   }
 }
+
+/** One draggable "M" marker for the route's meetup (staging) point. */
+export class RouteStagingMarker {
+  private marker: Marker | null = null;
+  private onDragEnd?: (at: LngLat) => void;
+
+  update(map: MlMap | null, at: LngLat | null, onDragEnd?: (at: LngLat) => void): void {
+    this.onDragEnd = onDragEnd;
+    if (!map || !at) return this.clear();
+    if (this.marker) return void this.marker.setLngLat(at);
+
+    const el = document.createElement('div');
+    el.className = 'route-waypoint-handle route-staging-handle';
+    el.textContent = 'M';
+    el.title = 'Meetup point: drag to move';
+    const marker = new Marker({ element: el, draggable: true }).setLngLat(at).addTo(map);
+    let panWas = false;
+    marker.on('dragstart', () => { panWas = map.dragPan?.isEnabled() ?? false; map.dragPan?.disable(); });
+    marker.on('dragend', () => {
+      if (panWas) map.dragPan?.enable();
+      const ll = marker.getLngLat();
+      this.onDragEnd?.([ll.lng, ll.lat]);
+    });
+    this.marker = marker;
+  }
+
+  clear(): void {
+    this.marker?.remove();
+    this.marker = null;
+  }
+}
