@@ -253,7 +253,8 @@ export function initFeedLayers(map: MlMap) {
   map.addSource('road-quality', { type: 'geojson', data: empty(), attribution: 'Roads © OpenStreetMap contributors' });
   map.addLayer({ id: 'road-quality', type: 'line', source: 'road-quality', minzoom: ROADS_MIN_ZOOM, layout: { visibility: 'none', 'line-cap': 'round', 'line-join': 'round' }, paint: {
     'line-color': grade('#22c55e', '#f59e0b', '#ef4444', '#9ca3af'),
-    'line-width': ['*', grade(1, 1, 1, 0.5), ['interpolate', ['linear'], ['zoom'], ROADS_MIN_ZOOM, 3, 18, 7]] as any,
+    // zoom must be the top-level interpolate input; the per-grade factor goes inside each stop.
+    'line-width': ['interpolate', ['linear'], ['zoom'], ROADS_MIN_ZOOM, ['*', 3, grade(1, 1, 1, 0.5)], 18, ['*', 7, grade(1, 1, 1, 0.5)]] as any,
     'line-opacity': grade(0.85, 0.85, 0.85, 0.5),
   } }, styleLayers(map).find((l) => l.type === 'symbol')?.id);
 
