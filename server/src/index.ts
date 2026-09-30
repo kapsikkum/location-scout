@@ -17,15 +17,19 @@ import { applySettingsUpdate, getSettings, publicSettings, tfnswKey } from './se
 import { geocode } from './geocode.js';
 import { bboxFromRadius, haversine, parseBbox, parseLatLng } from './geo.js';
 import { parseGoodTimes, GoodTimesError, DEFAULT_GOOD_TIMES } from './goodTimes.js';
-import { fetchPlanes } from './feeds/planes.js';
+import { fetchPlanes, fetchPlaneInfo, isValidHex, isValidCallsign } from './feeds/planes.js';
 import { fetchWeather } from './feeds/weather.js';
+import { fetchMarine } from './feeds/marine.js';
+import { fetchFires } from './feeds/rfs.js';
+import { fetchAurora } from './feeds/spaceWeather.js';
 import { fetchBuildings } from './sources/osm.js';
+import { fetchCameras } from './feeds/cameras.js';
 import {
   buildPointPassesResponse, combinedFeedData, combinedRealtime, emptyFeedData, nextPasses, parsePointPassRequest, predictTrainPositions, tripCount, TRAIN_FEEDS,
 } from './feeds/trains.js';
 import { nearbyFor } from './feeds/eventScout.js';
 import { getCachedRail, requestTilesForUnsnapped, trackGraphFor } from './sources/rail.js';
-import { commonsNearbyCached } from './sources/commons.js';
+import { commonsNearbyCached, lensStats } from './sources/commons.js';
 import { coverFields, deleteImages, detectImageType, MAX_PHOTO_BYTES, parseMultipart, saveImage, SPOT_COVER_COLS } from './photos.js';
 import { buildGpx } from './gpx.js';
 import { buildFeatureCollection, importFeatureCollection, ShareBundle, syncRemote } from './share.js';
@@ -442,11 +446,14 @@ app.delete('/api/spots/:id', (req, res) => {
 interface PhotoRow {
   id: string; spot_id: string; owner_id: string; kind: string; file: string; thumb: string;
   w: number; h: number; taken_at: string | null; caption: string; created_at: string;
+  focal_length?: number | null; date_time_original?: string | null;
 }
 function photoJson(r: PhotoRow) {
   return {
     id: r.id, spotId: r.spot_id, kind: r.kind, url: `/api/photos/${r.id}/file`, thumbUrl: `/api/photos/${r.id}/thumb`,
     w: r.w, h: r.h, takenAt: r.taken_at, caption: r.caption, createdAt: r.created_at,
+    focalLength: r.focal_length ?? null,
+    dateTimeOriginal: r.date_time_original ?? r.taken_at ?? null,
   };
 }
 
@@ -460,15 +467,20 @@ app.post('/api/spots/:id/photos', async (req, res, next) => {
     if (!files.photo || !detectImageType(files.photo)) return res.status(400).json({ error: 'photo must be a JPEG, PNG or WebP file' });
     const thumbBuf = files.thumb && detectImageType(files.thumb) ? files.thumb : files.photo;
 
+    const parsedFocal = fields.focalLength ? Number(fields.focalLength) : null;
+    const focalLength = parsedFocal !== null && Number.isFinite(parsedFocal) && parsedFocal > 0 ? parsedFocal : null;
+    const takenAt = fields.takenAt || null;
+    const dateTimeOriginal = takenAt;
+
     const file = saveImage(files.photo);
     const thumb = saveImage(thumbBuf);
     const id = crypto.randomUUID();
     const now = new Date().toISOString();
     const kind = fields.kind === 'of_location' ? 'of_location' : 'taken_here';
     db.handle
-      .prepare('INSERT INTO photos (id, spot_id, owner_id, kind, file, thumb, w, h, taken_at, caption, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .prepare('INSERT INTO photos (id, spot_id, owner_id, kind, file, thumb, w, h, taken_at, caption, created_at, focal_length, date_time_original) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
       .run(id, spot.id, req.user!.id, kind, file, thumb, Number(fields.w ?? 0) || 0, Number(fields.h ?? 0) || 0,
-        fields.takenAt || null, fields.caption ?? '', now);
+        takenAt, fields.caption ?? '', now, focalLength, dateTimeOriginal);
     res.status(201).json(photoJson(db.handle.prepare('SELECT * FROM photos WHERE id = ?').get(id) as unknown as PhotoRow));
   } catch (err) { next(err); }
 });
@@ -653,6 +665,20 @@ app.get('/api/planes', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+app.get('/api/planes/:hex/info', async (req, res, next) => {
+  try {
+    const { hex } = req.params;
+    if (!isValidHex(hex)) return res.status(400).json({ error: 'Invalid hex: must be 6 hex characters' });
+    let callsign: string | undefined = undefined;
+    if (req.query.callsign !== undefined && req.query.callsign !== '') {
+      const cs = String(req.query.callsign).trim();
+      if (!isValidCallsign(cs)) return res.status(400).json({ error: 'Invalid callsign: must be alphanumeric and up to 8 characters' });
+      callsign = cs;
+    }
+    res.json(await fetchPlaneInfo(hex, callsign));
+  } catch (err) { next(err); }
+});
+
 // --- weather ------------------------------------------------------------------
 
 app.get('/api/weather', async (req, res, next) => {
@@ -663,6 +689,36 @@ app.get('/api/weather', async (req, res, next) => {
     if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) return res.status(400).json({ error: 'lat and lng are required' });
     const baseUrl = process.env.OPEN_METEO_URL ?? 'https://api.open-meteo.com';
     res.json(await fetchWeather(baseUrl, lat, lng, Number.isFinite(days) ? days : 7));
+  } catch (err) { next(err); }
+});
+
+// --- marine (tides & swell) ---------------------------------------------------
+
+app.get('/api/marine', async (req, res, next) => {
+  try {
+    const lat = Number(req.query.lat);
+    const lng = Number(req.query.lng);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) {
+      return res.status(400).json({ error: 'lat and lng are required' });
+    }
+    const baseUrl = process.env.OPEN_METEO_MARINE_URL ?? 'https://marine-api.open-meteo.com';
+    res.json(await fetchMarine(baseUrl, lat, lng));
+  } catch (err) { next(err); }
+});
+
+// --- fires (NSW RFS) ----------------------------------------------------
+
+app.get('/api/fires', async (_req, res, next) => {
+  try {
+    res.json(await fetchFires());
+  } catch (err) { next(err); }
+});
+
+// --- aurora (NOAA space weather) ----------------------------------------
+
+app.get('/api/aurora', async (_req, res, next) => {
+  try {
+    res.json(await fetchAurora());
   } catch (err) { next(err); }
 });
 
@@ -730,6 +786,48 @@ app.get('/api/spots/:id/trains', (req, res) => {
   const hours = Number(req.query.hours ?? 6);
   const passes = nextPasses(combinedFeedData(db), spot, hours, new Date());
   res.json({ configured: true, passes });
+});
+
+// --- traffic cameras (TfNSW) --------------------------------------------------
+
+app.get('/api/cameras', async (_req, res, next) => {
+  try {
+    const key = tfnswKey(db);
+    if (!key) return res.json({ configured: false, cameras: [] });
+    const cameras = await fetchCameras(key);
+    res.json({ configured: true, cameras });
+  } catch (err) {
+    const status = (err as any).status ?? 502;
+    res.status(status).json({ error: (err as Error).message });
+  }
+});
+
+app.get('/api/cameras/:id/image', async (req, res, next) => {
+  try {
+    const key = tfnswKey(db);
+    if (!key) return res.status(404).json({ error: 'Not configured' });
+    const cameras = await fetchCameras(key);
+    const camera = cameras.find((c) => c.id === req.params.id);
+    if (!camera || !camera.imageUrl) return res.status(404).json({ error: 'Camera not found' });
+    const url = new URL(camera.imageUrl);
+    if (url.protocol !== 'https:') return res.status(502).json({ error: 'Camera image is not https' });
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 10_000);
+    try {
+      // The key only goes to TfNSW's own API host, never to wherever the feed points images.
+      const headers: Record<string, string> = { 'User-Agent': 'location-scout/0.1 (local personal app)' };
+      if (url.hostname === 'api.transport.nsw.gov.au') headers.Authorization = `apikey ${key}`;
+      const imgRes = await fetch(url, { headers, signal: controller.signal });
+      if (!imgRes.ok) return res.status(502).json({ error: `Image fetch failed (${imgRes.status})` });
+      const contentType = imgRes.headers.get('content-type') ?? '';
+      if (!contentType.startsWith('image/')) return res.status(502).json({ error: 'Camera image is not an image' });
+      res.setHeader('Content-Type', contentType);
+      const buf = Buffer.from(await imgRes.arrayBuffer());
+      res.send(buf);
+    } finally {
+      clearTimeout(timer);
+    }
+  } catch (err) { next(err); }
 });
 
 // --- Event Scout: nearby events and busyness --------------------------------------
@@ -808,7 +906,21 @@ app.get('/api/spots/:id/commons', async (req, res, next) => {
   try {
     const spot = db.handle.prepare('SELECT * FROM spots WHERE id = ?').get(req.params.id) as unknown as SpotRow | undefined;
     if (!spot || !canRead(spot.visibility, spot.owner_id, req.user)) return res.status(404).json({ error: 'Not found' });
-    res.json(await commonsNearbyCached(db, spot.lat, spot.lng));
+    const images = await commonsNearbyCached(db, spot.lat, spot.lng);
+    const ownRows = db.handle
+      .prepare('SELECT focal_length, taken_at, date_time_original FROM photos WHERE spot_id = ?')
+      .all(spot.id) as { focal_length: number | null; taken_at: string | null; date_time_original: string | null }[];
+    const allPhotos = [
+      // Commons clocks are often left on the uploader's home zone, so only own photos inform the time of day.
+      ...images.map((c) => ({ focal35: c.focal35, focalRaw: c.focalRaw, takenAt: null })),
+      ...ownRows.map((p) => ({
+        focal35: null,
+        focalRaw: p.focal_length,
+        takenAt: p.date_time_original ?? p.taken_at,
+      })),
+    ];
+    const stats = lensStats(allPhotos);
+    res.json({ images, stats });
   } catch (err) { next(err); }
 });
 

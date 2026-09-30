@@ -1,16 +1,18 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { api, Plane, Settings, Spot, TrainPass } from '../api.js';
-import { haversineKm } from '../map/geo.js';
+import { api, MarineData, Plane, Settings, Spot, TrainPass } from '../api.js';
+import { destination, haversineKm } from '../map/geo.js';
 import { Alignment, alignments, moonPhase, nextGoodWindow, PHASE_LABEL, Phase, sunriseSunset } from '../map/sun.js';
 import { hhmm, hhmm24, ymd } from '../time.js';
 import DayStrip from '../components/DayStrip.js';
 import ViewPreview from '../components/ViewPreview.js';
-import { bestWindows, buildingShadeAt, lightTimeline, WINDOW_LABEL, type ShadeTest, type Step, type WindowKind } from '../map/shootPlan.js';
+import { bestWindows, buildingShadeAt, lightTimeline, sunLeavesAt, WINDOW_LABEL, type ShadeTest, type Step, type WindowKind } from '../map/shootPlan.js';
 import { terrainShadeForPoint } from '../map/demPoint.js';
 import type { Footprint } from '../map/shadows.js';
 import { CRITERIA, DEFAULT_CRITERIA, parseCriteria, railDistanceKm, recommend, weatherAt, type Criterion, type Recommendation, type WeatherHour, type WeatherResponse } from '../map/recommend.js';
-import { fetchWeather } from './planWeather.js';
+import { fetchWeather, fetchMarine, formatMarineDay, type PlanWeatherResponse } from './planWeather.js';
+import { burnScore, hourAt } from '../map/weather.js';
+import { milkyWayWindows } from '../map/galaxy.js';
 import { MAP_CENTRE_KEY } from './MapPage.js';
 import SunBearingPlanner from '../components/SunBearingPlanner.js';
 
@@ -26,6 +28,17 @@ type Tab = 'rec' | 'day' | 'trains';
 const TABS: { key: Tab; label: string }[] = [
   { key: 'rec', label: 'Best times' }, { key: 'day', label: 'The day' }, { key: 'trains', label: 'Trains & planes' },
 ];
+
+const horizonCache = new Map<string, Promise<PlanWeatherResponse | null>>();
+function getHorizonWeather(lat: number, lng: number): Promise<PlanWeatherResponse | null> {
+  const key = `${lat.toFixed(2)},${lng.toFixed(2)}`;
+  let p = horizonCache.get(key);
+  if (!p) {
+    p = fetchWeather(lat, lng, 16).catch(() => null);
+    horizonCache.set(key, p);
+  }
+  return p;
+}
 
 interface Row { spot: Spot; km: number; good: { start: Date; end: Date; phase: Phase } | null; align: Alignment | null; score: number }
 
@@ -197,8 +210,9 @@ export default function PlanShoot() {
   const [terrain, setTerrain] = useState<ShadeTest | null | 'loading'>('loading');
   const [buildings, setBuildings] = useState<ShadeTest | null | 'loading'>('loading');
   const [buildingsErr, setBuildingsErr] = useState('');
-  const [weather, setWeather] = useState<WeatherResponse | null | 'loading'>('loading');
+  const [weather, setWeather] = useState<PlanWeatherResponse | null | 'loading'>('loading');
   const [weatherErr, setWeatherErr] = useState('');
+  const [marine, setMarine] = useState<MarineData | null | 'loading'>('loading');
   const [passes, setPasses] = useState<{ configured: boolean; passes: TrainPass[] } | null>(null);
   const [rail, setRail] = useState<GeoJSON.FeatureCollection | null>(null);
   const [planes, setPlanes] = useState<{ p: Plane; km: number }[] | null | 'error'>(null);
@@ -218,6 +232,13 @@ export default function PlanShoot() {
     let live = true;
     setWeather('loading'); setWeatherErr('');
     fetchWeather(plan.lat, plan.lng, 16).then((w) => live && setWeather(w)).catch((err) => { if (live) { setWeather(null); setWeatherErr((err as Error).message); } });
+    return () => { live = false; };
+  }, [plan?.id]);
+  useEffect(() => {
+    if (!plan) return;
+    let live = true;
+    setMarine('loading');
+    fetchMarine(plan.lat, plan.lng).then((m) => live && setMarine(m)).catch(() => live && setMarine(null));
     return () => { live = false; };
   }, [plan?.id]);
   const rangeEnd = addDays(fromDay, days);
@@ -251,10 +272,15 @@ export default function PlanShoot() {
   const hourly = weather && weather !== 'loading' ? weather.hourly : null;
   const planeCount = Array.isArray(planes) ? planes.length : null;
 
+  const mwWindows = useMemo(() => {
+    if (!plan) return [];
+    return Array.from({ length: days }, (_, i) => milkyWayWindows(addDays(fromDay, i), plan.lat, plan.lng)).flat();
+  }, [plan?.id, plan?.lat, plan?.lng, fromDay.getTime(), days]);
+
   const effective = criteria.filter((c) => (c !== 'train' || trainAvailable) && (c !== 'align' || plan?.facingDeg != null));
   const recs: Recommendation[] = useMemo(() => shadeReady && steps.length
-    ? recommend({ slots: steps, criteria: effective, weather: hourly, passes: trainPasses, alignments: aligns, livePlanes: planeCount, trainWindowMin: TRAIN_WINDOW_MIN, fmt: hhmm, n: 5 })
-    : [], [steps, effective.join(), hourly, trainPasses, aligns, planeCount]);
+    ? recommend({ slots: steps, criteria: effective, weather: hourly, passes: trainPasses, alignments: aligns, milkyWay: mwWindows, livePlanes: planeCount, trainWindowMin: TRAIN_WINDOW_MIN, fmt: hhmm, n: 5 })
+    : [], [steps, effective.join(), hourly, trainPasses, aligns, mwWindows, planeCount]);
 
   const focus = selected ?? recs[0]?.t ?? new Date(Math.max(fromDay.getTime(), Date.now()));
   const focusDay = startOfDay(focus);
@@ -296,6 +322,84 @@ export default function PlanShoot() {
     }
     return map;
   }, [hourly, dayList]);
+
+  const marineLine = useMemo(() => {
+    if (!marine || marine === 'loading') return null;
+    return formatMarineDay(marine, focusDay, focus);
+  }, [marine, focusDay, focus]);
+
+  const [sunriseBurn, setSunriseBurn] = useState<{ score: number; label: string } | null>(null);
+  const [sunsetBurn, setSunsetBurn] = useState<{ score: number; label: string } | null>(null);
+
+  useEffect(() => {
+    if (!plan || !weather || weather === 'loading') {
+      setSunriseBurn(null);
+      setSunsetBurn(null);
+      return;
+    }
+    let live = true;
+    const computeBurn = async () => {
+      let sBurn: { score: number; label: string } | null = null;
+      let setBurnRes: { score: number; label: string } | null = null;
+
+      if (rs?.sunrise) {
+        const riseTime = rs.sunrise.time;
+        const spotHour = hourAt(weather, riseTime.getTime());
+        if (spotHour) {
+          const [riseLng, riseLat] = destination(plan.lat, plan.lng, rs.sunrise.azimuth, 75);
+          const hWeather = await getHorizonWeather(riseLat, riseLng);
+          const hHour = hourAt(hWeather, riseTime.getTime());
+          const horizonLow = hHour?.cloudLowPct ?? null;
+          if (live) sBurn = burnScore(spotHour, horizonLow);
+        }
+      }
+
+      if (rs?.sunset) {
+        const setTime = rs.sunset.time;
+        const spotHour = hourAt(weather, setTime.getTime());
+        if (spotHour) {
+          const [setLng, setLat] = destination(plan.lat, plan.lng, rs.sunset.azimuth, 75);
+          const hWeather = await getHorizonWeather(setLat, setLng);
+          const hHour = hourAt(hWeather, setTime.getTime());
+          const horizonLow = hHour?.cloudLowPct ?? null;
+          if (live) setBurnRes = burnScore(spotHour, horizonLow);
+        }
+      }
+
+      if (live) {
+        setSunriseBurn(sBurn);
+        setSunsetBurn(setBurnRes);
+      }
+    };
+
+    computeBurn();
+    return () => { live = false; };
+  }, [plan?.id, plan?.lat, plan?.lng, rs?.sunrise?.time.getTime(), rs?.sunset?.time.getTime(), weather]);
+
+  const sunriseBadge = sunriseBurn ? `Sunrise: ${sunriseBurn.label} ${sunriseBurn.score}` : null;
+  const sunsetBadge = sunsetBurn ? `Sunset: ${sunsetBurn.label} ${sunsetBurn.score}` : null;
+
+  const sunLeavesLine = useMemo(() => {
+    if (!daySteps.length || !rs) return null;
+    const info = sunLeavesAt(daySteps);
+    const parts: string[] = [];
+    if (info.returns && rs.sunrise) {
+      const diffMin = Math.round((info.returns.getTime() - rs.sunrise.time.getTime()) / 60_000);
+      if (diffMin > 5) {
+        const obs = info.returnsObstacle === 'buildings' ? 'buildings' : 'ridge';
+        parts.push(`Sun clears the ${obs} at ${hhmm24(info.returns)}`);
+      }
+    }
+    if (info.leaves && rs.sunset) {
+      const diffMin = Math.round((rs.sunset.time.getTime() - info.leaves.getTime()) / 60_000);
+      if (diffMin > 5) {
+        const obs = info.obstacle === 'buildings' ? 'buildings' : 'terrain';
+        const altStr = info.horizonAlt != null ? ` (ridge ${info.horizonAlt >= 0 ? '+' : ''}${info.horizonAlt.toFixed(1)}°)` : '';
+        parts.push(`Sun behind ${obs} from ${hhmm24(info.leaves)}${altStr}, ${diffMin} min before sunset`);
+      }
+    }
+    return parts.length ? parts.join(' · ') : null;
+  }, [daySteps, rs]);
 
   return (
     <div className="page plan">
@@ -456,8 +560,9 @@ export default function PlanShoot() {
             <h3>Preview</h3>
             <ViewPreview lat={plan.lat} lng={plan.lng} facingDeg={plan.facingDeg} fovDeg={plan.fovDeg} time={focus} />
             <h3>Light</h3>
-            <DayStrip lat={plan.lat} lng={plan.lng} time={focus} />
+            <DayStrip lat={plan.lat} lng={plan.lng} time={focus} sunriseBadge={sunriseBadge} sunsetBadge={sunsetBadge} />
             {!shadeReady ? <p className="hint">Working out sun and shade…</p> : <LightStrip steps={daySteps} day={focusDay} />}
+            {sunLeavesLine && <p className="hint">{sunLeavesLine}</p>}
             <p className="hint">
               <span style={{ color: LIGHT_COLOR.sun }}>■</span> sun <span style={{ color: LIGHT_COLOR.shade }}>■</span> shade (terrain{terrain ? '' : ' unavailable'}, buildings{buildings === 'loading' ? '…' : buildings ? '' : ' unavailable'}) ·
               best: <span style={{ color: WINDOW_COLOR['golden-sun'] }}>■</span> golden on spot <span style={{ color: WINDOW_COLOR['even-shade'] }}>■</span> open shade
@@ -466,6 +571,7 @@ export default function PlanShoot() {
             <h3>Weather</h3>
             {hourly ? <><WeatherStrip hourly={hourly} day={focusDay} /><p className="hint">Shading = cloud cover · blue bar = rain chance · number = wind km/h</p></>
               : <p className="hint">{weather === 'loading' ? 'Loading forecast…' : 'Weather unavailable.'}</p>}
+            {marineLine && <p className="hint plan__marine">{marineLine}</p>}
             {dayPasses.length > 0 && (
               <>
                 <h3>Trains that day</h3>
@@ -520,7 +626,8 @@ export default function PlanShoot() {
             </div>
           </div>
           <h2>Sun &amp; moon · {dayLabel(focusDay)}</h2>
-          <p>Sunrise {rs?.sunrise ? `${hhmm(rs.sunrise.time)} (${Math.round(rs.sunrise.azimuth)}°)` : '—'} · Sunset {rs?.sunset ? `${hhmm(rs.sunset.time)} (${Math.round(rs.sunset.azimuth)}°)` : '—'} · {mp.name}, {Math.round(mp.fraction * 100)}% lit</p>
+          <p>Sunrise {rs?.sunrise ? `${hhmm(rs.sunrise.time)} (${Math.round(rs.sunrise.azimuth)}°)` : '—'}{sunriseBadge ? ` · ${sunriseBadge}` : ''} · Sunset {rs?.sunset ? `${hhmm(rs.sunset.time)} (${Math.round(rs.sunset.azimuth)}°)` : '—'}{sunsetBadge ? ` · ${sunsetBadge}` : ''} · {mp.name}, {Math.round(mp.fraction * 100)}% lit</p>
+          {sunLeavesLine && <p>{sunLeavesLine}</p>}
           {daySteps.length > 0 && <ul>{bestWindows(daySteps).map((w) => <li key={w.start.getTime()}>{WINDOW_LABEL[w.kind]} {hhmm(w.start)}–{hhmm(w.end)}</li>)}</ul>}
           <h2>Weather at {hhmm(focus)}</h2>
           <p>{focusWx ? `${Math.round(focusWx.tempC)}°C · cloud ${Math.round(focusWx.cloudPct)}% (low ${Math.round(focusWx.cloudLowPct)} / mid ${Math.round(focusWx.cloudMidPct)} / high ${Math.round(focusWx.cloudHighPct)}) · rain ${Math.round(focusWx.precipProbPct)}% · wind ${Math.round(focusWx.windKmh)} km/h, gusts ${Math.round(focusWx.gustKmh)}${focusWx.fogLikely ? ' · fog likely' : ''}` : 'No forecast.'}</p>

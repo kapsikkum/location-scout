@@ -1,10 +1,20 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { api, type AuroraData } from '../api.js';
 import { dayPhases, moonPhase, moonPos, PHASE_COLOR, PHASE_LABEL, phaseAt, sunPos } from '../map/sun.js';
+import { galacticCorePosition, milkyWayWindows } from '../map/galaxy.js';
 import { hhmm, useMapTime, ymd } from '../time.js';
 
 /** Date picker, Now button and a slider over the selected day with its sun phases drawn on the track. */
 export default function TimeBar({ lat, lng }: { lat: number; lng: number }) {
   const { time, live, setTime, goLive } = useMapTime();
+  const [aurora, setAurora] = useState<AuroraData | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    api.aurora().then((a) => { if (alive) setAurora(a); }).catch(() => {});
+    const id = setInterval(() => api.aurora().then((a) => { if (alive) setAurora(a); }).catch(() => {}), 30 * 60_000);
+    return () => { alive = false; clearInterval(id); };
+  }, []);
   const dayStart = new Date(time.getFullYear(), time.getMonth(), time.getDate());
   const dayKey = dayStart.getTime();
   const rLat = Math.round(lat * 20) / 20; // bands barely move within ~5 km
@@ -25,6 +35,12 @@ export default function TimeBar({ lat, lng }: { lat: number; lng: number }) {
   const sun = sunPos(time, lat, lng);
   const moon = moonPos(time, lat, lng);
   const phase = phaseAt(time, lat, lng);
+  const maxKp = Math.max(aurora?.kpNow ?? 0, aurora?.kpMaxNext24h ?? 0);
+  const showAurora = maxKp >= 5 && Math.abs(lat) >= 30;
+
+  const mwWindows = useMemo(() => milkyWayWindows(dayStart, rLat, rLng), [dayKey, rLat, rLng]);
+  const inMwWindow = mwWindows.some((w) => time >= w.start && time < w.end);
+  const mwCore = inMwWindow ? galacticCorePosition(time, lat, lng) : null;
 
   return (
     <div className="timebar">
@@ -40,6 +56,16 @@ export default function TimeBar({ lat, lng }: { lat: number; lng: number }) {
         <span className="timebar__meta">
           ☀ {Math.round(sun.azimuth)}° / {sun.altitude.toFixed(1)}° · ☾ {Math.round(moon.azimuth)}° / {moon.altitude.toFixed(0)}° {Math.round(moonPhase(time).fraction * 100)}%
         </span>
+        {showAurora && (
+          <span className="chip" title={`Current Kp: ${aurora?.kpNow?.toFixed(1) ?? '?'}, next 24h max: ${aurora?.kpMaxNext24h?.toFixed(1) ?? '?'}`}>
+            Aurora possible · Kp {maxKp.toFixed(1)}
+          </span>
+        )}
+        {inMwWindow && mwCore && (
+          <span className="chip" title="Milky Way core visibility">
+            MW core {Math.round(mwCore.altitude)}° @ {Math.round(mwCore.azimuth) % 360}°
+          </span>
+        )}
       </div>
       <input className="timebar__slider" type="range" min={0} max={24 * 60 - 1} step={5} value={minutes} style={{ background: gradient }}
         aria-label="Time of day"

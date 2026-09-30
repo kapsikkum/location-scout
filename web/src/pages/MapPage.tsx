@@ -3,24 +3,24 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { GeoJSONSource, LngLatBounds, Map as MlMap, MapMouseEvent, Marker, NavigationControl, Popup, ScaleControl, setWorkerUrl } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
-import { api, Candidate, Place, Plane, Spot, TrainPosition, User, type WeatherForecast } from '../api.js';
+import { api, Candidate, FireIncident, Place, Plane, type PlaneInfo, Spot, type TrafficCamera, TrainPosition, User, type WeatherForecast } from '../api.js';
 import { hourAt, pickRadarFrame, RAINVIEWER_INDEX, radarTileUrl, weatherIcon, type RadarIndex } from '../map/weather.js';
 import {
   CLICKABLE, initFeedLayers, initLayers, PLANE_LAYERS, setImagery, setLayerVisible, setTerrain3d, STYLE_URL, updateCandidates, updateDraft,
   updateMood, updatePlacesAndSpots, updatePlanes, updateRail, updateRays, setNearbyHighlight, updateShadows, updateTrains, updateWedges,
-  TRAIN_LAYERS, setTrains3d, updatePlanePositions, hiddenLayers, setRadarFrame,
+  TRAIN_LAYERS, setTrains3d, updatePlanePositions, hiddenLayers, setRadarFrame, FIRE_LAYERS, updateFires, updateCameras,
 } from '../map/layers.js';
 import { due, MotionTracker, planePredict, trainPredict } from '../map/motion.js';
 import { carriageCount } from '../map/trains3d.js';
 import { collectRailTiles, RailSnapper } from '../map/railSnap.js';
 import { goodNow, sunPos } from '../map/sun.js';
-import { Legend } from '../components/Legend.js';
+import { Legend, Swatch } from '../components/Legend.js';
 import { NearbyList } from '../components/NearbyList.js';
 import { attachGlance, attachThumbLoader, GLANCE_LAYERS } from '../map/spotGlance.js';
-import { CATEGORIES, groupLayers, loadVisibility, saveVisibility, type Visibility } from '../map/legend.js';
+import { CATEGORIES, category, groupLayers, loadVisibility, saveVisibility, type Visibility } from '../map/legend.js';
 import { applyBaseRailHighlight, effectiveRailOn, restoreBaseRailHighlight, type BaseRailPaintSnapshot } from '../map/baseRailHighlight.js';
 import { buildRailPassPopupHtml, clickableRailLayerIds } from '../map/railPasses.js';
-import { deadReckon } from '../map/planes.js';
+import { deadReckon, formatPlaneDetails } from '../map/planes.js';
 import { useMapTime } from '../time.js';
 import TimeBar from '../components/TimeBar.js';
 import SpotPanel from '../components/SpotPanel.js';
@@ -64,7 +64,7 @@ const newSpot = (lat: number, lng: number, placeId: string | null = null): SpotD
 });
 
 /** Legend keys whose visibility is applied by their own effect below. */
-const FEED_KEYS = ['imagery', 'planes', 'rail', 'trains', 'candidates', 'weather'];
+const FEED_KEYS = ['imagery', 'planes', 'rail', 'trains', 'candidates', 'weather', 'fires', 'cameras'];
 const RADAR_POLL_MS = 10 * 60_000;
 
 export default function MapPage({ user }: { user: User | null }) {
@@ -106,13 +106,15 @@ export default function MapPage({ user }: { user: User | null }) {
   const [vis, setVis] = useState<Visibility>(loadVisibility);
   useEffect(() => saveVisibility(vis), [vis]);
   const toggle = (key: string, on = !vis[key]) => setVis((v) => ({ ...v, [key]: on }));
-  const { planes: planesOn, rail: railOn, trains: trainsOn, candidates: candidatesOn, imagery, weather: weatherOn } = vis;
+  const { planes: planesOn, rail: railOn, trains: trainsOn, candidates: candidatesOn, imagery, weather: weatherOn, fires: firesOn, cameras: camerasOn } = vis;
   const railEffectiveOn = effectiveRailOn(railOn, trainsOn);
   const baseRailPaint = useRef<BaseRailPaintSnapshot[] | null>(null);
   const [rail, setRail] = useState<GeoJSON.FeatureCollection | null>(null);
   const [candidates, setCandidates] = useState<Candidate[]>([]);
+  const [fires, setFires] = useState<FireIncident[]>([]);
   const [planeData, setPlaneData] = useState<Plane[]>([]);
   const [trainData, setTrainData] = useState<TrainPosition[]>([]);
+  const [cameraData, setCameraData] = useState<TrafficCamera[]>([]);
 
   // Smooth movement between polls, and follow mode (camera on one vehicle).
   const planeMotion = useRef(new MotionTracker());
@@ -134,6 +136,7 @@ export default function MapPage({ user }: { user: User | null }) {
   useEffect(() => {
     const m = new MlMap({ container: container.current!, style: STYLE_URL, center: [149.577, -33.419], zoom: 10, maxPitch: 75 });
     m.addControl(new NavigationControl({ visualizePitch: true }), 'top-right');
+    m.addControl(homeControl(), 'top-right');
     m.addControl(new ScaleControl({}), 'bottom-left');
     m.once('style.load', () => { initLayers(m); initFeedLayers(m); setMap(m); });
     const onMove = () => {
@@ -259,6 +262,49 @@ export default function MapPage({ user }: { user: User | null }) {
     api.candidates(`${b.getSouth()},${b.getWest()},${b.getNorth()},${b.getEast()}`).then((c) => { if (!stop) { setCandidates(c); updateCandidates(map, c); } }).catch(() => {});
     return () => { stop = true; };
   }, [map, candidatesOn, view]);
+
+  // NSW RFS fire incidents: fetched on mount and polled every 5 min.
+  useEffect(() => {
+    let stop = false;
+    const load = () => api.fires().then((data) => { if (!stop) setFires(data); }).catch(() => {});
+    load();
+    const id = setInterval(load, 5 * 60_000);
+    return () => { stop = true; clearInterval(id); };
+  }, []);
+
+  useEffect(() => {
+    if (!map) return;
+    setLayerVisible(map, FIRE_LAYERS, !!firesOn);
+    if (firesOn) updateFires(map, fires);
+  }, [map, firesOn, fires]);
+
+  // NSW Live Traffic cameras: fetched when the layer is on and polled every 10 min.
+  useEffect(() => {
+    if (!map) return;
+    setLayerVisible(map, ['camera-cones', 'cameras'], !!camerasOn);
+    if (!camerasOn) return;
+    let stop = false;
+    const load = () => {
+      api.cameras().then((res) => {
+        if (stop) return;
+        if (res.cameras) {
+          setCameraData(res.cameras);
+          updateCameras(map, res.cameras);
+        }
+      }).catch((err) => {
+        if (!stop) setError((err as Error).message);
+      });
+    };
+    load();
+    const id = setInterval(load, 10 * 60_000);
+    return () => { stop = true; clearInterval(id); };
+  }, [map, camerasOn]);
+
+  useEffect(() => {
+    if (map && camerasOn && cameraData.length > 0) {
+      updateCameras(map, cameraData);
+    }
+  }, [map, camerasOn, cameraData]);
 
   // Animation: move planes and trains between polls, at most every FRAME_MS, and only for shown layers.
   const trainById = useMemo(() => new Map(trainData.map((t) => [t.tripId, t])), [trainData]);
@@ -466,7 +512,9 @@ export default function MapPage({ user }: { user: User | null }) {
     if (!map) return;
     const groups = groupLayers(map.getStyle().layers ?? []);
     for (const c of CATEGORIES) if (!FEED_KEYS.includes(c.key)) setLayerVisible(map, groups[c.key], vis[c.key]);
-  }, [map, vis]);
+    // Extruded buildings only in 3D; the flat footprints (which building shadows also read) stay either way.
+    setLayerVisible(map, groups.buildings.filter((id) => map.getLayer(id)?.type === 'fill-extrusion'), vis.buildings && terrain);
+  }, [map, vis, terrain]);
   useEffect(() => { if (map) setTerrain3d(map, terrain); }, [map, terrain]);
 
   const placeDraft = editing?.type === 'place' ? editing.draft : null;
@@ -540,6 +588,15 @@ export default function MapPage({ user }: { user: User | null }) {
     const hit = map.queryRenderedFeatures(e.point, { layers: CLICKABLE.filter((l) => map.getLayer(l)) })[0];
     if (!hit) return setSelected(null);
     const id = hit.properties?.id as string;
+    if (hit.layer.id === 'cameras') {
+      const coords = (hit.geometry as GeoJSON.Point).coordinates as [number, number];
+      showCameraPopup(map, coords, hit.properties ?? {});
+      return;
+    }
+    if (FIRE_LAYERS.includes(hit.layer.id)) {
+      showFirePopup(map, [lng, lat], hit.properties ?? {});
+      return;
+    }
     if (hit.layer.id === 'clusters') {
       (map.getSource('spots') as GeoJSONSource).getClusterExpansionZoom(hit.properties.cluster_id)
         .then((zoom) => map.easeTo({ center: (hit.geometry as GeoJSON.Point).coordinates as [number, number], zoom }));
@@ -680,7 +737,12 @@ export default function MapPage({ user }: { user: User | null }) {
         onHover={(at) => { if (map) setNearbyHighlight(map, at); }}
         following={follow?.id ?? null}
         onFollow={(kind, r) => (follow?.id === r.id ? setFollow(null) : startFollow(kind, r.id))}
-        onPlane={(r) => { if (map) map.flyTo({ center: [r.lng, r.lat], zoom: Math.max(map.getZoom(), 11) }); }}
+        onPlane={(r) => {
+          if (!map) return;
+          map.flyTo({ center: [r.lng, r.lat], zoom: Math.max(map.getZoom(), 11) });
+          const pl = planeData.find((x) => x.hex === r.id);
+          if (pl) showPlanePopup(map, pl, (id) => startFollow('plane', id));
+        }}
         onTrain={(r) => {
           if (!map) return;
           map.flyTo({ center: [r.lng, r.lat], zoom: Math.max(map.getZoom(), 12) });
@@ -690,13 +752,14 @@ export default function MapPage({ user }: { user: User | null }) {
         }} />
       <div className="maptools">
         <button className={`chip${goodOnly ? ' active' : ''}`} onClick={() => setGoodOnly(!goodOnly)} title="Only spots whose good times match the map time">Good now</button>
-        <button className={`chip${imagery ? ' active' : ''}`} onClick={() => toggle('imagery')}>Satellite</button>
+        <button className={`chip${imagery ? ' active' : ''}`} onClick={() => toggle('imagery')}><Swatch cat={category('imagery')} />{category('imagery').label}</button>
         <button className={`chip${terrain ? ' active' : ''}`} onClick={() => setTerrainOn(!terrain)}>3D</button>
-        <button className={`chip${planesOn ? ' active' : ''}`} onClick={() => toggle('planes')} title="Live aircraft, dead-reckoned 15 minutes ahead">✈ Planes</button>
-        <button className={`chip${railOn ? ' active' : ''}`} onClick={() => toggle('rail')}>🛤 Rail</button>
-        <button className={`chip${trainsOn ? ' active' : ''}`} onClick={() => toggle('trains')} title="Live passenger train positions, refreshed every 20s (needs a TfNSW key)">🚆 Trains</button>
-        <button className={`chip${weatherOn ? ' active' : ''}`} onClick={() => toggle('weather')} title="Rain radar (RainViewer, recent past only) and the forecast at the map centre for the map time">🌦 Weather</button>
-        <button className={`chip${candidatesOn ? ' active' : ''}`} onClick={() => toggle('candidates')} title="OpenStreetMap viewpoints, ruins and other candidates">📍 Candidates</button>
+        <button className={`chip${planesOn ? ' active' : ''}`} onClick={() => toggle('planes')} title="Live aircraft, dead-reckoned 15 minutes ahead"><Swatch cat={category('planes')} />{category('planes').label}</button>
+        <button className={`chip${railOn ? ' active' : ''}`} onClick={() => toggle('rail')}><Swatch cat={category('rail')} />{category('rail').label}</button>
+        <button className={`chip${trainsOn ? ' active' : ''}`} onClick={() => toggle('trains')} title="Live passenger train positions, refreshed every 20s (needs a TfNSW key)"><Swatch cat={category('trains')} />{category('trains').label}</button>
+        <button className={`chip${weatherOn ? ' active' : ''}`} onClick={() => toggle('weather')} title="Rain radar (RainViewer, recent past only) and the forecast at the map centre for the map time"><Swatch cat={category('weather')} />{category('weather').label}</button>
+        <button className={`chip${candidatesOn ? ' active' : ''}`} onClick={() => toggle('candidates')} title="OpenStreetMap viewpoints, ruins and other candidates"><Swatch cat={category('candidates')} />{category('candidates').label}</button>
+        <button className={`chip${camerasOn ? ' active' : ''}`} onClick={() => toggle('cameras')} title="NSW live traffic cameras (TfNSW)"><Swatch cat={category('cameras')} />{category('cameras').label}</button>
         {user && !editing && (
           <>
             <button className={`chip${mode === 'pick-spot' ? ' active' : ''}`} onClick={() => setMode(mode === 'pick-spot' ? 'browse' : 'pick-spot')}>+ Spot</button>
@@ -754,7 +817,7 @@ export default function MapPage({ user }: { user: User | null }) {
           )}
           {!editing && selectedSpot && (
             <>
-              <SpotPanel spot={selectedSpot} place={places.find((p) => p.id === selectedSpot.placeId)} time={time}
+              <SpotPanel spot={selectedSpot} place={places.find((p) => p.id === selectedSpot.placeId)} time={time} fires={fires}
                 canEdit={canEdit(selectedSpot.ownerId)}
                 onEdit={() => { setEditing({ type: 'spot', draft: { ...selectedSpot } }); focus(selectedSpot.lng, selectedSpot.lat); }}
                 onDelete={() => void deleteSpot(selectedSpot)}
@@ -846,13 +909,26 @@ function showTrainPopup(map: MlMap, f: GeoJSON.Feature, onFollow?: (id: string) 
   openPopup(map, (f.geometry as GeoJSON.Point).coordinates as [number, number], html, onFollow && p.id ? () => onFollow(p.id!) : undefined);
 }
 
-/** Popup for a clicked plane: callsign, type, altitude and speed, and a Follow button. */
-function showPlanePopup(map: MlMap, p: Plane, onFollow: (hex: string) => void) {
+function buildPlanePopupHtml(p: Plane, info?: PlaneInfo | null): string {
   const alt = p.alt_baro == null ? '' : p.alt_baro <= 0 ? ' · ground' : ` · ${Math.round((p.alt_baro * 0.3048) / 10) * 10} m`;
-  const html = `<strong>${escapeHtml(planeName(p))}</strong>${p.t ? ` <span>${escapeHtml(p.t)}</span>` : ''}<br/>`
+  const details = info ? formatPlaneDetails(info) : null;
+  return `<strong>${escapeHtml(planeName(p))}</strong>${p.t && (!details || !info?.type) ? ` <span>${escapeHtml(p.t)}</span>` : ''}<br/>`
+    + (details ? `<span>${escapeHtml(details)}</span><br/>` : '')
     + `<span>${p.gs != null ? `${Math.round(p.gs * 1.852)} km/h` : 'speed –'}${alt}</span>`
     + '<br/><button class="popup-follow" type="button">Follow</button>';
-  openPopup(map, [p.lon, p.lat], html, () => onFollow(p.hex));
+}
+
+/** Popup for a clicked plane: callsign, enriched info (adsbdb), altitude and speed, and a Follow button. */
+function showPlanePopup(map: MlMap, p: Plane, onFollow: (hex: string) => void) {
+  const popup = openPopup(map, [p.lon, p.lat], buildPlanePopupHtml(p), () => onFollow(p.hex));
+  api.planeInfo(p.hex, p.flight || undefined)
+    .then((info) => {
+      if (trainPopup.current === popup && popup.isOpen()) {
+        popup.setHTML(buildPlanePopupHtml(p, info));
+        popup.getElement()?.querySelector('.popup-follow')?.addEventListener('click', () => { popup.remove(); onFollow(p.hex); });
+      }
+    })
+    .catch(() => {});
 }
 
 function showRailPassPopup(map: MlMap, lat: number, lng: number) {
@@ -864,6 +940,55 @@ function showRailPassPopup(map: MlMap, lat: number, lng: number) {
     .catch((err) => {
       if (trainPopup.current === popup) popup.setHTML(`<div role="alert"><strong>Passenger trains</strong><br/><span>${escapeHtml((err as Error).message)}</span></div>`);
     });
+}
+
+function showFirePopup(map: MlMap, at: [number, number], p: Record<string, any>) {
+  const title = escapeHtml(String(p.title || 'Fire Incident'));
+  const cat = escapeHtml(String(p.category || ''));
+  const status = escapeHtml(String(p.status || ''));
+  const size = p.sizeHa != null ? ` · ${p.sizeHa} ha` : '';
+  const link = p.link ? `<br/><a href="${escapeHtml(String(p.link))}" target="_blank" rel="noopener noreferrer">RFS incident details</a>` : '';
+  const html = `<strong>${title}</strong>${cat ? ` · <span>${cat}</span>` : ''}<br/>`
+    + (status ? `<span>Status: ${status}${size}</span>` : '')
+    + link;
+  openPopup(map, at, html);
+}
+
+/** Map control: fly back to the instance's home (Settings), read on each click so an edited home applies at once. */
+function homeControl() {
+  const el = document.createElement('div');
+  el.className = 'maplibregl-ctrl maplibregl-ctrl-group';
+  el.innerHTML = `<button type="button" title="Home" aria-label="Fly to home"><svg viewBox="0 0 24 24" width="18" height="18" style="margin:auto;display:block" fill="none" stroke="#333" stroke-width="2" stroke-linejoin="round"><path d="M3 11 12 4l9 7"/><path d="M5 10v10h5v-6h4v6h5V10"/></svg></button>`;
+  return {
+    onAdd(map: MlMap) {
+      el.querySelector('button')!.onclick = () => {
+        api.settings().then((s) => map.flyTo({ center: [s.home.lng, s.home.lat], zoom: 10, bearing: 0, pitch: 0 })).catch(() => {});
+      };
+      return el;
+    },
+    onRemove() { el.remove(); },
+  };
+}
+
+function showCameraPopup(map: MlMap, at: [number, number], p: Record<string, any>) {
+  const id = String(p.id ?? '');
+  const title = escapeHtml(String(p.title || 'Traffic camera'));
+  const direction = p.direction ? escapeHtml(String(p.direction)) : '';
+  const view = p.view ? escapeHtml(String(p.view)) : '';
+  const rawUrl = String(p.imageUrl || '');
+  const t = Date.now();
+  const directUrl = rawUrl ? (rawUrl.includes('?') ? `${rawUrl}&t=${t}` : `${rawUrl}?t=${t}`) : '';
+  const proxyUrl = id ? `/api/cameras/${encodeURIComponent(id)}/image?t=${t}` : '';
+  const imgUrl = directUrl || proxyUrl;
+  const fallbackAttr = proxyUrl && directUrl ? ` onerror="if(this.src!=='${escapeHtml(proxyUrl)}'){this.src='${escapeHtml(proxyUrl)}';}"` : '';
+
+  const html = `<div class="camera-popup">`
+    + (imgUrl ? `<div style="margin-bottom:6px;"><img src="${escapeHtml(imgUrl)}"${fallbackAttr} alt="${title}" style="width:100%;max-width:320px;height:auto;border-radius:4px;display:block;background:#171a21;" loading="lazy" /></div>` : '')
+    + `<strong>${title}</strong>`
+    + (direction ? ` <span>(${direction})</span>` : '')
+    + (view && view !== title ? `<br/><span style="font-size:11px;color:#8a93a6;">${view}</span>` : '')
+    + `</div>`;
+  openPopup(map, at, html);
 }
 
 function openPopup(map: MlMap, at: [number, number], html: string, onFollow?: () => void) {

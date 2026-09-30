@@ -72,7 +72,9 @@ CREATE TABLE IF NOT EXISTS photos (
   h INTEGER NOT NULL DEFAULT 0,
   taken_at TEXT,
   caption TEXT NOT NULL DEFAULT '',
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  focal_length REAL,
+  date_time_original TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_photos_spot ON photos(spot_id);
 
@@ -208,6 +210,8 @@ export function createDb(filePath: string = path.join(dataDir, 'location-scout.d
   if (filePath !== ':memory:') handle.exec('PRAGMA journal_mode = WAL');
   handle.exec(SCHEMA);
   addColumnIfMissing(handle, 'sightings', 'loaded', 'loaded INTEGER');
+  addColumnIfMissing(handle, 'photos', 'focal_length', 'focal_length REAL');
+  addColumnIfMissing(handle, 'photos', 'date_time_original', 'date_time_original TEXT');
 
   function getKv(key: string): string | null {
     const row = handle.prepare('SELECT value, expires_at FROM kv WHERE key = ?').get(key) as

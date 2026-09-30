@@ -1,8 +1,8 @@
-import { groupLayers, type LegendLayer } from './legend.js';
+import { groupLayers, RAIL_COLOR, type LegendLayer } from './legend.js';
 
 const RAIL_BASE = 'rail-base';
 const HIGHLIGHT = {
-  'line-color': '#f5a623',
+  'line-color': RAIL_COLOR,
   'line-width': 4,
   'line-opacity': 0.95,
 } as const;

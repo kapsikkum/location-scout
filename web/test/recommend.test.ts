@@ -68,7 +68,18 @@ test('railDistanceKm measures to the segment, not just vertices', () => {
   assert.equal(railDistanceKm(null, 0, 0), Infinity);
 });
 
+test('scoreSlots: milky-way scores 1 inside window with reason; misses outside', () => {
+  const slots: Slot[] = [{ t: at(0), phase: 'astro', light: 'night' }, { t: at(60), phase: 'astro', light: 'night' }];
+  const milkyWay = [{ start: at(-10), end: at(30), label: 'Milky Way core' }];
+  const [a, b] = scoreSlots({ slots, criteria: ['milky-way'], milkyWay, now: at(-60) });
+  assert.equal(a.score, 1);
+  assert.deepEqual(a.reasons, ['Milky Way core']);
+  assert.equal(b.score, 0);
+  assert.deepEqual(b.misses, ['no Milky Way core']);
+});
+
 test('parseCriteria drops unknown keys', () => {
-  assert.deepEqual(parseCriteria('golden,bogus,train'), ['golden', 'train']);
+  assert.deepEqual(parseCriteria('golden,bogus,milky-way,train'), ['golden', 'milky-way', 'train']);
   assert.equal(parseCriteria(null), null);
 });
+

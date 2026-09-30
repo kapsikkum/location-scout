@@ -1,15 +1,23 @@
 /** Browser photo pipeline: read EXIF, then re-encode to WebP (which also strips EXIF, so no GPS leaks). */
 import exifr from 'exifr';
 
-export interface PhotoMeta { lat: number | null; lng: number | null; takenAt: Date | null }
+export interface PhotoMeta { lat: number | null; lng: number | null; takenAt: Date | null; focalLength: number | null }
 
 export async function readExif(file: File): Promise<PhotoMeta> {
   try {
-    const m = await exifr.parse(file, { gps: true, pick: ['DateTimeOriginal', 'latitude', 'longitude', 'GPSLatitude', 'GPSLongitude', 'GPSLatitudeRef', 'GPSLongitudeRef'] });
+    const m = await exifr.parse(file, { gps: true, pick: ['DateTimeOriginal', 'latitude', 'longitude', 'GPSLatitude', 'GPSLongitude', 'GPSLatitudeRef', 'GPSLongitudeRef', 'FocalLength', 'FocalLengthIn35mmFilm'] });
     const ok = typeof m?.latitude === 'number' && typeof m?.longitude === 'number';
-    return { lat: ok ? m.latitude : null, lng: ok ? m.longitude : null, takenAt: m?.DateTimeOriginal instanceof Date ? m.DateTimeOriginal : null };
+    
+    let focalLength: number | null = null;
+    if (m) {
+      const focal35 = typeof m.FocalLengthIn35mmFilm === 'number' && Number.isFinite(m.FocalLengthIn35mmFilm) && m.FocalLengthIn35mmFilm > 0 ? m.FocalLengthIn35mmFilm : null;
+      const focalRaw = typeof m.FocalLength === 'number' && Number.isFinite(m.FocalLength) && m.FocalLength > 0 ? m.FocalLength : null;
+      focalLength = focal35 ?? focalRaw ?? null;
+    }
+
+    return { lat: ok ? m.latitude : null, lng: ok ? m.longitude : null, takenAt: m?.DateTimeOriginal instanceof Date ? m.DateTimeOriginal : null, focalLength };
   } catch {
-    return { lat: null, lng: null, takenAt: null };
+    return { lat: null, lng: null, takenAt: null, focalLength: null };
   }
 }
 

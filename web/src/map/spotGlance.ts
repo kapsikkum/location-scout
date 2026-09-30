@@ -27,6 +27,20 @@ export function compass(deg: number): string {
   return COMPASS[Math.round((((deg % 360) + 360) % 360) / 22.5) % 16];
 }
 
+const WORD: Record<string, string> = { north: 'N', south: 'S', east: 'E', west: 'W' };
+/** Bearing of a compass point written as "NE", "north-east" or "Southbound"; null for anything else. */
+export function compassBearing(text: string): number | null {
+  const t = text.trim().toLowerCase().replace(/bound$/, '').replace(/north|south|east|west/g, (w) => WORD[w]).replace(/[\s-]/g, '').toUpperCase();
+  const i = COMPASS.indexOf(t);
+  return i < 0 ? null : i * 22.5;
+}
+
+/** Which way a traffic camera faces: its direction field, else "looking east…" in its view text. */
+export function cameraBearing(direction: string, view: string): number | null {
+  const looking = /\b(?:looking|facing)\s+((?:north|south)(?:[\s-]?(?:east|west))?|east|west)\b/i.exec(view)?.[1];
+  return compassBearing(direction) ?? (looking ? compassBearing(looking) : null);
+}
+
 export function escapeHtml(s: string): string {
   return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
 }

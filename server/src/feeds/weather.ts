@@ -14,6 +14,7 @@ export interface WeatherHour {
   visibilityM: number | null;
   weatherCode: number | null;
   fogLikely: boolean;
+  aod: number | null;
 }
 
 export interface WeatherForecast {
@@ -30,6 +31,25 @@ const HOURLY_VARS = [
 
 type Hourly = Partial<Record<(typeof HOURLY_VARS)[number], (number | null)[]>> & { time?: (string | number)[] };
 
+export type AirQualityHourly = {
+  time?: (string | number)[];
+  aerosol_optical_depth?: (number | null)[];
+};
+
+/** Parse an Open-Meteo Air Quality response into a Map from ISO UTC string to AOD. */
+export function parseAirQuality(data: { hourly?: AirQualityHourly }): Map<string, number> {
+  const map = new Map<string, number>();
+  const times = data.hourly?.time ?? [];
+  const aods = data.hourly?.aerosol_optical_depth ?? [];
+  times.forEach((t, i) => {
+    const d = typeof t === 'number' ? new Date(t * 1000) : new Date(/Z|[+-]\d\d:?\d\d$/.test(t) ? t : `${t}Z`);
+    if (Number.isNaN(d.getTime())) return;
+    const v = num(aods[i]);
+    if (v != null) map.set(d.toISOString(), v);
+  });
+  return map;
+}
+
 /** Fog: WMO codes 45/48, or visibility under 1 km, or near-saturated low cloud with calm wind is not enough on its own. */
 export function isFogLikely(h: { visibilityM: number | null; weatherCode: number | null }): boolean {
   if (h.weatherCode === 45 || h.weatherCode === 48) return true;
@@ -39,7 +59,13 @@ export function isFogLikely(h: { visibilityM: number | null; weatherCode: number
 const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 
 /** Parse an Open-Meteo response requested with timeformat=unixtime (or ISO GMT strings). */
-export function parseOpenMeteo(data: { hourly?: Hourly }, lat: number, lng: number, fetchedAt = new Date()): WeatherForecast {
+export function parseOpenMeteo(
+  data: { hourly?: Hourly },
+  lat: number,
+  lng: number,
+  fetchedAt = new Date(),
+  aodByTime?: Map<string, number>,
+): WeatherForecast {
   const h = data.hourly ?? {};
   const times = h.time ?? [];
   const at = (k: (typeof HOURLY_VARS)[number], i: number) => num(h[k]?.[i]);
@@ -49,8 +75,9 @@ export function parseOpenMeteo(data: { hourly?: Hourly }, lat: number, lng: numb
     if (Number.isNaN(d.getTime())) return;
     const visibilityM = at('visibility', i);
     const weatherCode = at('weather_code', i);
+    const isoTime = d.toISOString();
     hourly.push({
-      time: d.toISOString(),
+      time: isoTime,
       tempC: at('temperature_2m', i),
       cloudPct: at('cloud_cover', i),
       cloudLowPct: at('cloud_cover_low', i),
@@ -63,6 +90,7 @@ export function parseOpenMeteo(data: { hourly?: Hourly }, lat: number, lng: numb
       visibilityM,
       weatherCode,
       fogLikely: isFogLikely({ visibilityM, weatherCode }),
+      aod: aodByTime?.get(isoTime) ?? null,
     });
   });
   return { lat, lng, fetchedAt: fetchedAt.toISOString(), hourly };
@@ -91,9 +119,28 @@ export async function fetchWeather(baseUrl: string, lat: number, lng: number, da
     try {
       const url = `${baseUrl.replace(/\/$/, '')}/v1/forecast?latitude=${sLat}&longitude=${sLng}&hourly=${HOURLY_VARS.join(',')}`
         + `&wind_speed_unit=kmh&timeformat=unixtime&timezone=GMT&forecast_days=${d}&past_days=1`;
-      const res = await fetch(url, { headers: { 'User-Agent': 'location-scout/0.1 (local personal app)' }, signal: controller.signal });
+      const aqDays = Math.min(7, d);
+      const aqUrl = `https://air-quality-api.open-meteo.com/v1/air-quality?latitude=${sLat}&longitude=${sLng}&hourly=aerosol_optical_depth`
+        + `&timeformat=unixtime&timezone=GMT&forecast_days=${aqDays}&past_days=1`;
+
+      const [res, aqRes] = await Promise.all([
+        fetch(url, { headers: { 'User-Agent': 'location-scout/0.1 (local personal app)' }, signal: controller.signal }),
+        fetch(aqUrl, { headers: { 'User-Agent': 'location-scout/0.1 (local personal app)' }, signal: controller.signal }).catch(() => null),
+      ]);
       if (!res.ok) throw new Error(`Open-Meteo returned ${res.status}`);
-      const data = parseOpenMeteo((await res.json()) as { hourly?: Hourly }, sLat, sLng);
+      const weatherJson = (await res.json()) as { hourly?: Hourly };
+
+      let aodMap: Map<string, number> | undefined;
+      if (aqRes && aqRes.ok) {
+        try {
+          const aqJson = (await aqRes.json()) as { hourly?: AirQualityHourly };
+          aodMap = parseAirQuality(aqJson);
+        } catch {
+          // If air-quality parse fails, keep forecast and set aod null
+        }
+      }
+
+      const data = parseOpenMeteo(weatherJson, sLat, sLng, new Date(), aodMap);
       cache.set(key, { at: Date.now(), data });
       return data;
     } catch (err) {
