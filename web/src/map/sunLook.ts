@@ -47,19 +47,32 @@ export interface SunLook {
   phase: Phase;
 }
 
-export function sunLook(sun: { altitude: number; azimuth: number }): SunLook {
+/** Weather that dulls the sky: cloud cover %, rain mm/h, fog. Missing values count as clear. */
+export interface SkyWeather { cloudPct?: number | null; precipMm?: number | null; fogLikely?: boolean | null }
+
+/** How overcast the sky looks, 0 (clear) to 1 (heavy grey): cloud cover, darkened further by rain, fog fully grey. */
+export function overcast(w: SkyWeather | null | undefined): number {
+  if (!w) return 0;
+  if (w.fogLikely) return 1;
+  const cloud = Math.max(0, Math.min(1, ((w.cloudPct ?? 0) - 20) / 70)); // light cloud still reads as blue sky
+  return Math.min(1, cloud * 0.85 + ((w.precipMm ?? 0) > 0.2 ? 0.25 : 0));
+}
+
+export function sunLook(sun: { altitude: number; azimuth: number }, weather?: SkyWeather | null): SunLook {
   const { altitude: alt, azimuth } = sun;
   const phase = phaseFor(alt, true);
   const base = skyBase(alt);
   const dayT = Math.max(0, Math.min(1, (alt + 6) / 12)); // 0 at night/blue, 1 by golden/day
   const intensity = Math.max(0.05, Math.min(1, (alt + 10) / 40));
   const polar = Math.max(0, Math.min(90, 90 - alt));
+  const grey = overcast(weather);
 
   return {
     sky: {
-      'sky-color': lerpColor('#0a1a3a', '#3a8fd9', dayT),
-      'horizon-color': base,
-      'fog-color': base,
+      // Clear: deep blue overhead, the sun-phase tint at the horizon. Overcast pulls both to a grey that dims at night.
+      'sky-color': lerpColor(lerpColor('#0a1a3a', '#3a8fd9', dayT), lerpColor('#1c1f24', '#8b9097', dayT), grey),
+      'horizon-color': lerpColor(base, lerpColor('#24272c', '#b3b7bc', dayT), grey),
+      'fog-color': lerpColor(base, lerpColor('#24272c', '#b3b7bc', dayT), grey),
       'sky-horizon-blend': 0.5,
       'horizon-fog-blend': 0.5,
       'fog-ground-blend': 0.5,

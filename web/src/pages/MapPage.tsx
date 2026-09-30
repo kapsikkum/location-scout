@@ -4,6 +4,7 @@ import { GeoJSONSource, LngLatBounds, Map as MlMap, MapMouseEvent, Marker, Navig
 import 'maplibre-gl/dist/maplibre-gl.css';
 import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
 import { api, Candidate, FireIncident, Place, Plane, type PlaneInfo, Route, Spot, type TrafficCamera, TrainPosition, User, type WeatherForecast } from '../api.js';
+import { sunLook } from '../map/sunLook.js';
 import { hourAt, pickRadarFrame, RAINVIEWER_INDEX, radarTileUrl, weatherIcon, type RadarIndex } from '../map/weather.js';
 import {
   CLICKABLE, initFeedLayers, initLayers, PLANE_LAYERS, setImagery, setLayerVisible, setTerrain3d, STYLE_URL, updateCandidates, updateDraft,
@@ -440,6 +441,8 @@ export default function MapPage({ user }: { user: User | null }) {
   const routeDraft = editing?.type === 'route' ? editing.draft : null;
   const routeDraftRef = useRef<RouteDraft | null>(null);
   routeDraftRef.current = routeDraft;
+  const cursorState = useRef({ mode, snap: false });
+  cursorState.current = { mode, snap: !!routeDraft?.snap };
   const spotDraft = editing?.type === 'spot' ? editing.draft : null;
 
   const timeKey = Math.floor(time.getTime() / 300_000); // "good" needn't be redone more often than the slider's step
@@ -520,10 +523,14 @@ export default function MapPage({ user }: { user: User | null }) {
   }, [map, weatherOn, radarIdx?.host, radarFrame?.path]);
   const [forecast, setForecast] = useState<WeatherForecast | null>(null);
   useEffect(() => {
-    if (!weatherOn) return;
+    if (!weatherOn && !terrain) return; // the readout needs it, and so does the 3D sky
     const id = setTimeout(() => api.weather(centre.lat, centre.lng).then(setForecast).catch(() => setForecast(null)), 600);
     return () => clearTimeout(id);
-  }, [weatherOn, centre.lat, centre.lng]);
+  }, [weatherOn, terrain, centre.lat, centre.lng]);
+  // 3D sky: blue by day, sunset tints, grey under cloud, rain or fog at the map time.
+  useEffect(() => {
+    if (map) map.setSky(sunLook(sunPos(time, centre.lat, centre.lng), hourAt(forecast, time.getTime())).sky);
+  }, [map, time, centre.lat, centre.lng, forecast]);
   const wxHour = weatherOn ? hourAt(forecast, time.getTime()) : null;
   const wxNight = sunPos(time, centre.lat, centre.lng).altitude < 0;
   // Categories without their own feed effect: apply straight from the legend state.
@@ -679,9 +686,17 @@ export default function MapPage({ user }: { user: User | null }) {
     if (!map) return;
     const click = (e: MapMouseEvent) => onClick.current(e);
     map.on('click', click);
-    const pointer = (on: boolean) => () => { map.getCanvas().style.cursor = on ? 'pointer' : ''; };
-    for (const l of [...CLICKABLE, 'trains', 'planes']) { map.on('mouseenter', l, pointer(true)); map.on('mouseleave', l, pointer(false)); }
-    return () => { map.off('click', click); };
+    // One cursor rule on every move (enter/leave per layer flickered inside places and wiped the drawing crosshair):
+    // placing = crosshair, or a hand over a road when snapping a route; browsing = hand over anything clickable.
+    const move = (e: MapMouseEvent) => {
+      const { mode: m, snap } = cursorState.current;
+      const over = (ids: string[]) => { const l = ids.filter((id) => map.getLayer(id)); return l.length > 0 && map.queryRenderedFeatures(e.point, { layers: l }).length > 0; };
+      const roads = () => groupLayers(map.getStyle().layers ?? []).roads ?? [];
+      map.getCanvas().style.cursor = m !== 'browse' ? (m === 'draw' && snap && over(roads()) ? 'pointer' : 'crosshair')
+        : over([...CLICKABLE, 'trains', 'planes']) ? 'pointer' : '';
+    };
+    map.on('mousemove', move);
+    return () => { map.off('click', click); map.off('mousemove', move); };
   }, [map]);
 
   useEffect(() => {
