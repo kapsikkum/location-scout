@@ -87,6 +87,11 @@ export default function MapPage({ user }: { user: User | null }) {
   const [editing, setEditing] = useState<Editing>(null);
   const [stagingMode, setStagingMode] = useState(false);
   const [mode, setMode] = useState<'browse' | 'pick-spot' | 'draw' | 'anchor'>('browse');
+  const [sheetSize, setSheetSize] = useState<'peek' | 'half'>('peek');
+  const editorKey = editing ? `${editing.type}:${(editing.draft as { id?: string }).id ?? 'new'}` : null;
+  const selectedKey = selected ? `${selected.type}:${selected.id}` : null;
+  // Back to peek whenever the sheet's content changes or a map-picking mode starts, so the map stays usable.
+  useEffect(() => { setSheetSize('peek'); }, [editorKey, selectedKey, mode, stagingMode]);
   const [sunAnchor, setSunAnchor] = useState<Coordinate | null>(null);
   const [sunAnchorBearing, setSunAnchorBearing] = useState<number | null>(null);
   const [terrain, setTerrainOn] = useState(false);
@@ -504,6 +509,52 @@ export default function MapPage({ user }: { user: User | null }) {
     setRouteHistoryVersion((value) => value + 1);
   }
 
+  function fitRouteIfOutOfBounds(vertices: [number, number][]) {
+    if (!map || vertices.length < 2) return;
+    const phone = window.innerWidth <= 820;
+    const mapContainer = map.getContainer();
+    const mapW = mapContainer.clientWidth;
+    const mapH = mapContainer.clientHeight;
+    if (mapW <= 0 || mapH <= 0) return;
+
+    const panelEl = (container.current?.parentElement?.querySelector('.panel') ?? document.querySelector('.panel')) as HTMLElement | null;
+    const panelHeight = panelEl ? panelEl.getBoundingClientRect().height : (phone ? mapH * 0.38 : 0);
+    const panelWidth = panelEl ? panelEl.getBoundingClientRect().width : 390;
+
+    const toolsEl = (container.current?.parentElement?.querySelector('.maptools') ?? document.querySelector('.maptools')) as HTMLElement | null;
+    const mapRect = mapContainer.getBoundingClientRect();
+    const toolsBottom = toolsEl ? Math.max(0, toolsEl.getBoundingClientRect().bottom - mapRect.top) : 40;
+
+    const padding = phone
+      ? {
+          top: Math.round(toolsBottom + 16),
+          bottom: Math.round(panelHeight + 24),
+          left: 24,
+          right: 24,
+        }
+      : {
+          top: 24,
+          bottom: 24,
+          left: 24,
+          right: Math.round(panelWidth + 24),
+        };
+
+    const minX = padding.left;
+    const maxX = mapW - padding.right;
+    const minY = padding.top;
+    const maxY = mapH - padding.bottom;
+
+    const isOutside = vertices.some(([lng, lat]) => {
+      const pt = map.project([lng, lat]);
+      return pt.x < minX || pt.x > maxX || pt.y < minY || pt.y > maxY;
+    });
+
+    if (isOutside) {
+      const b = vertices.reduce((acc, c) => acc.extend(c), new LngLatBounds(vertices[0], vertices[0]));
+      map.fitBounds(b, { padding, maxZoom: 16, duration: 500 });
+    }
+  }
+
   function calculateRoute(draft: RouteDraft) {
     const request = ++routeRequest.current;
     const session = routeSession.current;
@@ -512,6 +563,7 @@ export default function MapPage({ user }: { user: User | null }) {
       setRouting(false);
       setDuration(null);
       setRouteDraft({ ...draft, vertices: waypoints });
+      if (waypoints.length >= 2) fitRouteIfOutOfBounds(waypoints);
       return;
     }
     setRouting(true);
@@ -526,6 +578,7 @@ export default function MapPage({ user }: { user: User | null }) {
       setRouteDraft({ ...current, vertices: result.coordinates });
       setDuration(result.durationSeconds);
       setRouting(false);
+      fitRouteIfOutOfBounds(result.coordinates);
     });
   }
 
@@ -566,6 +619,7 @@ export default function MapPage({ user }: { user: User | null }) {
     setDuration(entry.duration);
     setRouting(false);
     if (!entry.ready) calculateRoute(entry.draft);
+    else if (entry.draft.vertices.length >= 2) fitRouteIfOutOfBounds(entry.draft.vertices);
     setRouteHistoryVersion((value) => value + 1);
   }
 
@@ -1028,7 +1082,7 @@ export default function MapPage({ user }: { user: User | null }) {
       {roadsStatus && <div className={`maptoast${roadsStatus === 'failed' ? ' error' : ''}`} role="status">{{
         loading: 'Loading roads…', failed: 'Road data unavailable — Overpass busy, retry by moving the map', zoom: 'Zoom in to see road quality',
       }[roadsStatus]}</div>}
-      {mode !== 'browse' && (
+      {mode !== 'browse' && (mode === 'pick-spot' || mode === 'anchor' || editing?.type !== 'route') && (
         <div className="maptoast">
           {mode === 'pick-spot'
             ? 'Click the map to place the spot'
@@ -1109,7 +1163,16 @@ export default function MapPage({ user }: { user: User | null }) {
       </div>
 
       {panelOpen && (
-        <aside className="panel">
+        <aside className={`panel panel--${sheetSize}`}>
+          <button
+            type="button"
+            className="panel__handle"
+            aria-label={sheetSize === 'half' ? 'Collapse panel' : 'Expand panel'}
+            aria-expanded={sheetSize === 'half'}
+            onClick={() => setSheetSize((s) => (s === 'half' ? 'peek' : 'half'))}
+          >
+            <span className="panel__grab" aria-hidden="true" />
+          </button>
           <button className="panel__close" onClick={() => { if (editing) cancelEdit(); else setSelected(null); }} title="Close">✕</button>
           {editing?.type === 'spot' && (
             <SpotEditor key={editing.draft.id ?? 'new'} map={map} draft={editing.draft} places={places}
