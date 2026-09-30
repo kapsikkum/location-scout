@@ -17,6 +17,7 @@ import { carriageCount } from '../map/trains3d.js';
 import { collectRailTiles, RailSnapper } from '../map/railSnap.js';
 import { goodNow, sunPos } from '../map/sun.js';
 import { Legend, Swatch } from '../components/Legend.js';
+import { MapMenus } from '../components/MapMenus.js';
 import { NearbyList } from '../components/NearbyList.js';
 import { attachGlance, attachThumbLoader, GLANCE_LAYERS } from '../map/spotGlance.js';
 import { CATEGORIES, category, groupLayers, loadVisibility, saveVisibility, type Visibility } from '../map/legend.js';
@@ -1044,29 +1045,36 @@ export default function MapPage({ user }: { user: User | null }) {
             (id) => startFollow('train', id));
         }} />
       <div className="maptools">
-        <button className={`chip${goodOnly ? ' active' : ''}`} onClick={() => setGoodOnly(!goodOnly)} title="Only spots whose good times match the map time">Good now</button>
-        <button className={`chip${imagery ? ' active' : ''}`} onClick={() => toggle('imagery')}><Swatch cat={category('imagery')} />{category('imagery').label}</button>
-        <button className={`chip${terrain ? ' active' : ''}`} onClick={() => setTerrainOn(!terrain)}>3D</button>
-        <button className={`chip${planesOn ? ' active' : ''}`} onClick={() => toggle('planes')} title="Live aircraft, dead-reckoned 15 minutes ahead"><Swatch cat={category('planes')} />{category('planes').label}</button>
-        <button className={`chip${railOn ? ' active' : ''}`} onClick={() => toggle('rail')}><Swatch cat={category('rail')} />{category('rail').label}</button>
-        <button className={`chip${trainsOn ? ' active' : ''}`} onClick={() => toggle('trains')} title="Live passenger train positions, refreshed every 20s (needs a TfNSW key)"><Swatch cat={category('trains')} />{category('trains').label}</button>
-        <button className={`chip${weatherOn ? ' active' : ''}`} onClick={() => toggle('weather')} title="Rain radar (RainViewer, recent past only) and the forecast at the map centre for the map time"><Swatch cat={category('weather')} />{category('weather').label}</button>
-        <button className={`chip${candidatesOn ? ' active' : ''}`} onClick={() => toggle('candidates')} title="OpenStreetMap viewpoints, ruins and other candidates"><Swatch cat={category('candidates')} />{category('candidates').label}</button>
-        <button className={`chip${vis['road-quality'] ? ' active' : ''}`} onClick={() => toggle('road-quality')} title="OpenStreetMap roads from z13: green good, amber fair, red poor/unpaved, grey unknown. Surface tags are incomplete, so grey and fair are often guesses."><Swatch cat={category('road-quality')} />{category('road-quality').label}</button>
-        <button className={`chip${camerasOn ? ' active' : ''}`} onClick={() => toggle('cameras')} title="NSW live traffic cameras (TfNSW)"><Swatch cat={category('cameras')} />{category('cameras').label}</button>
-        <button className={`chip${routesOn ? ' active' : ''}`} onClick={() => toggle('routes')} title="Show or hide saved routes"><Swatch cat={category('routes')} />{category('routes').label}</button>
-        {user && !editing && (
-          <>
-            <button className={`chip${mode === 'pick-spot' ? ' active' : ''}`} onClick={() => setMode(mode === 'pick-spot' ? 'browse' : 'pick-spot')}>+ Spot</button>
-            <button className="chip" onClick={() => { setSelected(null); setEditing({ type: 'spot', draft: newSpot(centre.lat, centre.lng) }); }}>+ Spot here</button>
-            <button className="chip" onClick={() => openRouteEdit(blankRouteDraft())}>+ Route</button>
-            <button className="chip" onClick={() => {
+        <MapMenus menus={[
+          { label: 'Map', items: [
+            { key: 'imagery', label: category('imagery').label, swatch: <Swatch cat={category('imagery')} />, on: imagery, onSelect: () => toggle('imagery') },
+            { key: '3d', label: '3D', on: terrain, onSelect: () => setTerrainOn(!terrain) },
+            { key: 'good', label: 'Good now', on: goodOnly, title: 'Only spots whose good times match the map time', onSelect: () => setGoodOnly(!goodOnly) },
+          ] },
+          { label: 'Live', items: [
+            { key: 'planes', label: category('planes').label, swatch: <Swatch cat={category('planes')} />, on: planesOn, title: 'Live aircraft, dead-reckoned 15 minutes ahead', onSelect: () => toggle('planes') },
+            { key: 'trains', label: category('trains').label, swatch: <Swatch cat={category('trains')} />, on: trainsOn, title: 'Live passenger train positions, refreshed every 20s (needs a TfNSW key)', onSelect: () => toggle('trains') },
+            { key: 'weather', label: category('weather').label, swatch: <Swatch cat={category('weather')} />, on: weatherOn, title: 'Rain radar (RainViewer, recent past only) and the forecast at the map centre for the map time', onSelect: () => toggle('weather') },
+            { key: 'cameras', label: category('cameras').label, swatch: <Swatch cat={category('cameras')} />, on: camerasOn, title: 'NSW live traffic cameras (TfNSW)', onSelect: () => toggle('cameras') },
+            { key: 'fires', label: category('fires').label, swatch: <Swatch cat={category('fires')} />, on: !!vis.fires, onSelect: () => toggle('fires') },
+          ] },
+          { label: 'Scout', items: [
+            { key: 'candidates', label: category('candidates').label, swatch: <Swatch cat={category('candidates')} />, on: candidatesOn, title: 'OpenStreetMap viewpoints, ruins and other candidates', onSelect: () => toggle('candidates') },
+            { key: 'road-quality', label: category('road-quality').label, swatch: <Swatch cat={category('road-quality')} />, on: !!vis['road-quality'], title: 'OpenStreetMap roads from z13: green good, amber fair, red poor/unpaved, grey unknown. Surface tags are incomplete, so grey and fair are often guesses.', onSelect: () => toggle('road-quality') },
+            { key: 'rail', label: category('rail').label, swatch: <Swatch cat={category('rail')} />, on: railOn, onSelect: () => toggle('rail') },
+            { key: 'routes', label: category('routes').label, swatch: <Swatch cat={category('routes')} />, on: routesOn, title: 'Show or hide saved routes', onSelect: () => toggle('routes') },
+          ] },
+          ...(user && !editing ? [{ label: '+ Add', items: [
+            { key: 'spot', label: 'Spot (pick on map)', onSelect: () => setMode(mode === 'pick-spot' ? 'browse' : 'pick-spot') },
+            { key: 'spot-here', label: 'Spot here', onSelect: () => { setSelected(null); setEditing({ type: 'spot', draft: newSpot(centre.lat, centre.lng) }); } },
+            { key: 'route', label: 'Route', onSelect: () => openRouteEdit(blankRouteDraft()) },
+            { key: 'place', label: 'Place', onSelect: () => {
               setSelected(null);
               setEditing({ type: 'place', draft: { name: '', notes: '', access: '', visibility: 'private', lat: centre.lat, lng: centre.lng, kind: 'polygon', coords: [] } });
               setMode('draw');
-            }}>+ Place</button>
-          </>
-        )}
+            } },
+          ] }] : []),
+        ]} />
       </div>
       <div className="sunanchor-controls" role="group" aria-label="Sun anchor controls">
         <button
