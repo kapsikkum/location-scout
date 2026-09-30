@@ -33,7 +33,7 @@ export function useOvertureBuildings(map: MlMap) {
     const before = layers[layers.indexOf(l) + 1]?.id;
     const common = { id: `${l.id}-overture`, source: 'overture', 'source-layer': 'building', minzoom: l.minzoom, filter: EXTRA };
     if (l.type === 'fill-extrusion') {
-      map.addLayer({ ...common, type: 'fill-extrusion', paint: { ...l.paint, 'fill-extrusion-height': HEIGHT as never, 'fill-extrusion-base': ['coalesce', ['get', 'min_height'], 0] } }, before);
+      map.addLayer({ ...common, type: 'fill-extrusion', minzoom: Math.max(15, l.minzoom ?? 14), paint: { ...l.paint, 'fill-extrusion-height': HEIGHT as never, 'fill-extrusion-base': ['coalesce', ['get', 'min_height'], 0] } }, before);
     } else if (l.type === 'fill') {
       map.addLayer({ ...common, type: 'fill', paint: l.paint }, before);
     }

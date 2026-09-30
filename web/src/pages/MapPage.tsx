@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { GeoJSONSource, LngLatBounds, Map as MlMap, MapMouseEvent, Marker, NavigationControl, Popup, ScaleControl, setWorkerUrl } from 'maplibre-gl';
+import { GeoJSONSource, LngLatBounds, Map as MlMap, MapMouseEvent, Marker, NavigationControl, Point, Popup, ScaleControl, setWorkerUrl } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
 import { api, Candidate, FireIncident, Place, Plane, type PlaneInfo, Route, Spot, type TrafficCamera, TrainPosition, User, type WeatherForecast } from '../api.js';
@@ -142,7 +142,7 @@ export default function MapPage({ user }: { user: User | null }) {
 
   // --- map lifecycle ---
   useEffect(() => {
-    const m = new MlMap({ container: container.current!, style: STYLE_URL, center: [149.577, -33.419], zoom: 10, maxPitch: 75 });
+    const m = new MlMap({ container: container.current!, style: STYLE_URL, center: [149.577, -33.419], zoom: 10, maxPitch: 70 });
     m.addControl(new NavigationControl({ visualizePitch: true }), 'top-right');
     m.addControl(homeControl(), 'top-right');
     m.addControl(new ScaleControl({}), 'bottom-left');
@@ -540,6 +540,8 @@ export default function MapPage({ user }: { user: User | null }) {
     for (const c of CATEGORIES) if (!FEED_KEYS.includes(c.key)) setLayerVisible(map, groups[c.key], vis[c.key]);
     // Extruded buildings only in 3D; the flat footprints (which building shadows also read) stay either way.
     setLayerVisible(map, groups.buildings.filter((id) => map.getLayer(id)?.type === 'fill-extrusion'), vis.buildings && terrain);
+    // In 3D terrain mode, hide the 2D hillshade layer to avoid duplicate DEM tile fetching and RTT slope shading
+    setLayerVisible(map, ['hillshade'], vis.terrain && !terrain);
   }, [map, vis, terrain]);
   useEffect(() => { if (map) setTerrain3d(map, terrain); }, [map, terrain]);
 
@@ -686,17 +688,45 @@ export default function MapPage({ user }: { user: User | null }) {
     if (!map) return;
     const click = (e: MapMouseEvent) => onClick.current(e);
     map.on('click', click);
-    // One cursor rule on every move (enter/leave per layer flickered inside places and wiped the drawing crosshair):
-    // placing = crosshair, or a hand over a road when snapping a route; browsing = hand over anything clickable.
-    const move = (e: MapMouseEvent) => {
+    let moveRaf = 0;
+    let pendingPoint: Point | null = null;
+    let roadsCached: string[] | null = null;
+    let clickableCached: string[] | null = null;
+
+    const updateCursor = (point: Point) => {
       const { mode: m, snap } = cursorState.current;
-      const over = (ids: string[]) => { const l = ids.filter((id) => map.getLayer(id)); return l.length > 0 && map.queryRenderedFeatures(e.point, { layers: l }).length > 0; };
-      const roads = () => groupLayers(map.getStyle().layers ?? []).roads ?? [];
-      map.getCanvas().style.cursor = m !== 'browse' ? (m === 'draw' && snap && over(roads()) ? 'pointer' : 'crosshair')
-        : over([...CLICKABLE, 'trains', 'planes']) ? 'pointer' : '';
+      if (m === 'browse') {
+        if (!clickableCached) clickableCached = [...CLICKABLE, 'trains', 'planes'].filter((id) => map.getLayer(id));
+        const hasOver = clickableCached.length > 0 && map.queryRenderedFeatures(point, { layers: clickableCached }).length > 0;
+        map.getCanvas().style.cursor = hasOver ? 'pointer' : '';
+      } else if (m === 'draw' && snap) {
+        if (!roadsCached) roadsCached = (groupLayers(map.getStyle().layers ?? []).roads ?? []).filter((id) => map.getLayer(id));
+        const hasOver = roadsCached.length > 0 && map.queryRenderedFeatures(point, { layers: roadsCached }).length > 0;
+        map.getCanvas().style.cursor = hasOver ? 'pointer' : 'crosshair';
+      } else {
+        map.getCanvas().style.cursor = 'crosshair';
+      }
+    };
+
+    const move = (e: MapMouseEvent) => {
+      if (pointerDown.current) return;
+      pendingPoint = e.point;
+      if (!moveRaf) {
+        moveRaf = requestAnimationFrame(() => {
+          moveRaf = 0;
+          if (pendingPoint) {
+            updateCursor(pendingPoint);
+            pendingPoint = null;
+          }
+        });
+      }
     };
     map.on('mousemove', move);
-    return () => { map.off('click', click); map.off('mousemove', move); };
+    return () => {
+      map.off('click', click);
+      map.off('mousemove', move);
+      if (moveRaf) cancelAnimationFrame(moveRaf);
+    };
   }, [map]);
 
   useEffect(() => {

@@ -211,6 +211,7 @@ export function stepRouteDashAnimation(
   sunAltitudeDeg = 30,
   now = performance.now(),
 ): void {
+  if (map.isMoving()) return; // Don't invalidate RTT textures while the camera is moving or pitching
   if (!drawnRoutes.get(map)) return; // nothing to animate: don't repaint the map every frame for it
   if (!map.getLayer(ROUTE_DASH_LAYER) || map.getLayoutProperty(ROUTE_DASH_LAYER, 'visibility') === 'none') return;
   if (now - (state.lastPaintAt ?? -Infinity) < DASH_FRAME_MS) return;

@@ -42,10 +42,11 @@ export function buildingLayerIds(map: MlMap): string[] {
   return styleLayers(map).filter((l) => 'source-layer' in l && l['source-layer'] === 'building').map((l) => l.id);
 }
 
-export const DEM_SOURCE = { type: 'raster-dem' as const, tiles: [TERRARIUM], tileSize: 256, maxzoom: 15, encoding: 'terrarium' as const,
+export const DEM_SOURCE = { type: 'raster-dem' as const, tiles: [TERRARIUM], tileSize: 256, maxzoom: 14, encoding: 'terrarium' as const,
   attribution: 'Terrain: <a href="https://registry.opendata.aws/terrain-tiles/">AWS Terrain Tiles</a>' };
 
 export function initLayers(map: MlMap) {
+  try { map.setSourceTileLodParams(4.0, 1.8); } catch { /* ignore */ }
   useOvertureBuildings(map);
   const layers = styleLayers(map);
   const firstSymbol = layers.find((l) => l.type === 'symbol')?.id;
@@ -233,7 +234,7 @@ export function initFeedLayers(map: MlMap) {
   map.on('pitch', () => applyTrainPitch(map));
   map.on('zoom', () => applyTrainPitch(map));
   // Terrain arriving lets trains that were waiting on it go 3D.
-  map.on('sourcedata', (e) => { if (e.sourceId === 'terrain' && e.isSourceLoaded) map.triggerRepaint(); });
+  map.on('sourcedata', (e) => { if (!hiddenLayers.has('trains') && e.sourceId === 'terrain' && e.isSourceLoaded) map.triggerRepaint(); });
   applyTrainPitch(map);
 
   // Nearby list hover: a ring around the hovered plane or train.
@@ -499,6 +500,31 @@ export function setImagery(map: MlMap, on: boolean) {
 export function setTerrain3d(map: MlMap, on: boolean) {
   map.setTerrain(on ? { source: 'terrain', exaggeration: 1.4 } : null);
   map.easeTo({ pitch: on ? 60 : 0, duration: 600 });
+  if (on) {
+    try {
+      // Cheaper terrain mesh/textures; pokes MapLibre internals, so a version bump must not throw.
+      const t = (map as any).terrain;
+      if (t) {
+        t.meshSize = 64;
+        t.qualityFactor = 1;
+        const p = (map as any).painter;
+        if (p?.renderToTexture) {
+          p.renderToTexture.rttSize = t.tileManager.tileSize * t.qualityFactor;
+        }
+      }
+    } catch {
+      // internals changed; keep MapLibre defaults
+    }
+  }
+  try {
+    if (on) {
+      map.setSourceTileLodParams(4.0, 1.8);
+    } else {
+      map.setSourceTileLodParams(9.314, 3.0);
+    }
+  } catch {
+    // Style tile managers might still be initializing
+  }
 }
 
 /** Hillshade light from the sun, and a tint that follows its altitude. */
@@ -510,6 +536,7 @@ function paint(map: MlMap, layer: string, prop: Parameters<MlMap["setPaintProper
 }
 
 const lastLight = new WeakMap<MlMap, string>();
+const lastBuildingShade = new WeakMap<MlMap, string>();
 export function updateMood(map: MlMap, sun: { azimuth: number; altitude: number }) {
   const up = sun.altitude > 0;
   paint(map, 'hillshade', 'hillshade-illumination-direction', sun.azimuth);
@@ -533,8 +560,11 @@ export function updateMood(map: MlMap, sun: { azimuth: number; altitude: number 
   const lk = JSON.stringify(light);
   if (lastLight.get(map) !== lk) { lastLight.set(map, lk); map.setLight(light); }
   const shade = up ? (sun.altitude < 8 ? '#cbbfb3' : '#d9d6d0') : '#2a2e3d';
-  for (const id of buildingLayerIds(map)) {
-    if (map.getLayer(id)?.type === 'fill-extrusion') paint(map, id, 'fill-extrusion-color', shade);
+  if (lastBuildingShade.get(map) !== shade) {
+    lastBuildingShade.set(map, shade);
+    for (const id of buildingLayerIds(map)) {
+      if (map.getLayer(id)?.type === 'fill-extrusion') paint(map, id, 'fill-extrusion-color', shade);
+    }
   }
 }
 
@@ -569,15 +599,20 @@ export function updateShadows(map: MlMap, sun: { azimuth: number; altitude: numb
     setBuildingShadows(map, null);
     return setData(map, 'shadows', empty());
   }
-  const layers = buildingLayerIds(map).filter((id) => map.getLayer(id));
-  if (!layers.length) return;
+  const allLayers = buildingLayerIds(map).filter((id) => map.getLayer(id));
+  if (!allLayers.length) return;
+  // Query flat 2D fill layers when available rather than heavy 3D extruded prism geometries
+  const flatLayers = allLayers.filter((id) => map.getLayer(id)?.type === 'fill');
+  const layers = flatLayers.length ? flatLayers : allLayers;
   const seen = new Set<string>();
   const features: Footprint[] = [];
   for (const f of map.queryRenderedFeatures({ layers })) {
-    const key = `${f.id}:${JSON.stringify((f.geometry as GeoJSON.Polygon).coordinates?.[0]?.[0])}`;
+    const coords = (f.geometry as GeoJSON.Polygon).coordinates?.[0]?.[0];
+    const key = `${f.id}:${coords ? `${coords[0]},${coords[1]}` : ''}`;
     if (seen.has(key)) continue;
     seen.add(key);
     features.push({ geometry: f.geometry, properties: f.properties });
+    if (features.length >= 1000) break;
   }
   // Nothing changed (same buildings, sun within 0.1°): skip the polygon work entirely.
   const key = `${sun.azimuth.toFixed(1)}|${sun.altitude.toFixed(1)}|${[...seen].sort().join(',')}`;
