@@ -22,7 +22,7 @@ export async function overpassQuery<T>(query: string, opts: { timeoutMs?: number
       try {
         const res = await fetchImpl(url, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'User-Agent': 'location-scout' },
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'User-Agent': 'location-scout/0.1 (+https://github.com/kapsikkum/location-scout)' },
           body: `data=${encodeURIComponent(query)}`,
           signal: controller.signal,
         });
