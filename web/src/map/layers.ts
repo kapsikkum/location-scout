@@ -248,6 +248,15 @@ export function initFeedLayers(map: MlMap) {
   map.addLayer({ id: 'candidates', type: 'circle', source: 'candidates', layout: { visibility: 'none' },
     paint: { 'circle-radius': 6, 'circle-color': '#6b7280', 'circle-opacity': 0.55, 'circle-stroke-color': '#e9ecf3', 'circle-stroke-width': 1, 'circle-stroke-opacity': 0.6 } });
 
+  // OSM road quality: graded by surface/smoothness, under labels; unknown is thin and faint.
+  const grade = (good: string | number, fair: string | number, poor: string | number, unknown: string | number) => ['match', ['get', 'grade'], 'good', good, 'fair', fair, 'poor', poor, unknown] as any;
+  map.addSource('road-quality', { type: 'geojson', data: empty(), attribution: 'Roads © OpenStreetMap contributors' });
+  map.addLayer({ id: 'road-quality', type: 'line', source: 'road-quality', minzoom: ROADS_MIN_ZOOM, layout: { visibility: 'none', 'line-cap': 'round', 'line-join': 'round' }, paint: {
+    'line-color': grade('#22c55e', '#f59e0b', '#ef4444', '#9ca3af'),
+    'line-width': ['*', grade(1, 1, 1, 0.5), ['interpolate', ['linear'], ['zoom'], ROADS_MIN_ZOOM, 3, 18, 7]] as any,
+    'line-opacity': grade(0.85, 0.85, 0.85, 0.5),
+  } }, styleLayers(map).find((l) => l.type === 'symbol')?.id);
+
   // NSW RFS fire incidents: points coloured by alert level + polygons outlined
   const FIRE_COLOR = ['match', ['get', 'category'], 'Emergency Warning', '#ef4444', 'Emergency', '#ef4444', 'Watch and Act', '#f97316', 'Advice', '#eab308', '#9ca3af'] as any;
   map.addSource('fires', { type: 'geojson', data: empty(), attribution: '© NSW RFS' });
@@ -385,6 +394,12 @@ export function updateCandidates(map: MlMap, candidates: { id: string; name: str
   })) });
 }
 
+export const ROADS_MIN_ZOOM = 13;
+
+export function updateRoads(map: MlMap, roads: GeoJSON.FeatureCollection) {
+  setData(map, 'road-quality', roads);
+}
+
 export const FIRE_LAYERS = ['fires-polys-fill', 'fires-polys-line', 'fires-pts'];
 
 export function extractFireGeometries(geom: GeoJSON.Geometry): { point: GeoJSON.Point | null; polygons: (GeoJSON.Polygon | GeoJSON.MultiPolygon)[] } {
@@ -491,7 +506,7 @@ function cameraIcon(): ImageData {
   return g.getImageData(0, 0, 44, 44);
 }
 
-export const CLICKABLE = ['spot-thumbs', 'place-spot-thumbs', 'spot-points', 'place-spots', 'clusters', 'place-points', 'place-fill', 'place-line', 'candidates', 'fires-pts', 'fires-polys-fill', 'fires-polys-line', 'cameras', 'route-lines', 'route-staging'];
+export const CLICKABLE = ['spot-thumbs', 'place-spot-thumbs', 'spot-points', 'place-spots', 'clusters', 'place-points', 'place-fill', 'place-line', 'candidates', 'fires-pts', 'fires-polys-fill', 'fires-polys-line', 'cameras', 'road-quality', 'route-lines', 'route-staging'];
 
 export function setImagery(map: MlMap, on: boolean) {
   map.setLayoutProperty('imagery', 'visibility', on ? 'visible' : 'none');

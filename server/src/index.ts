@@ -23,6 +23,7 @@ import { fetchMarine } from './feeds/marine.js';
 import { fetchFires } from './feeds/rfs.js';
 import { fetchAurora } from './feeds/spaceWeather.js';
 import { fetchBuildings } from './sources/osm.js';
+import { cellsFor, fetchRoadCell, type RoadFeature } from './sources/roads.js';
 import { fetchCameras } from './feeds/cameras.js';
 import {
   buildPointPassesResponse, combinedFeedData, combinedRealtime, emptyFeedData, nextPasses, parsePointPassRequest, predictTrainPositions, tripCount, TRAIN_FEEDS,
@@ -873,6 +874,34 @@ app.get('/api/candidates', (req, res) => {
     res.json(rows.map((r) => ({ id: r.id, source: r.source, ref: r.ref, name: r.name, lat: r.lat, lng: r.lng, tags: JSON.parse(r.tags), fetchedAt: r.fetched_at })));
   } catch (err) {
     res.status(400).json({ error: (err as Error).message });
+  }
+});
+
+// Road quality (OSM): per 0.05 degree cell, cached 14 days. bbox is capped to roughly a z13 viewport.
+app.get('/api/roads', async (req, res) => {
+  let cells: ReturnType<typeof cellsFor>;
+  try {
+    const b = parseBbox(String(req.query.bbox ?? ''));
+    if (b.north <= b.south || b.east <= b.west) throw new Error('bbox is empty');
+    if ((b.north - b.south) * (b.east - b.west) > 0.12) throw new Error('bbox too large; zoom in');
+    cells = cellsFor(b);
+  } catch (err) { return res.status(400).json({ error: (err as Error).message }); }
+  try {
+    const features = new Map<number, RoadFeature>(); // ways spanning cells appear once
+    for (const c of cells) {
+      const key = `roads:${c.south},${c.west}`;
+      let cell: RoadFeature[];
+      const cached = db.getKv(key);
+      if (cached) cell = JSON.parse(cached);
+      else {
+        cell = await fetchRoadCell(c);
+        db.setKv(key, JSON.stringify(cell), new Date(Date.now() + 14 * 86_400_000).toISOString());
+      }
+      for (const f of cell) features.set(f.id, f);
+    }
+    res.json({ type: 'FeatureCollection', features: [...features.values()] });
+  } catch (err) {
+    res.status(503).json({ error: (err as Error).message });
   }
 });
 

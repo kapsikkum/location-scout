@@ -7,7 +7,7 @@ import { api, Candidate, FireIncident, Place, Plane, type PlaneInfo, Route, Spot
 import { sunLook } from '../map/sunLook.js';
 import { hourAt, pickRadarFrame, RAINVIEWER_INDEX, radarTileUrl, weatherIcon, type RadarIndex } from '../map/weather.js';
 import {
-  CLICKABLE, initFeedLayers, initLayers, PLANE_LAYERS, setImagery, setLayerVisible, setTerrain3d, STYLE_URL, updateCandidates, updateDraft,
+  CLICKABLE, initFeedLayers, initLayers, PLANE_LAYERS, setImagery, setLayerVisible, setTerrain3d, STYLE_URL, updateCandidates, updateDraft, updateRoads, ROADS_MIN_ZOOM,
   updateMood, updatePlacesAndSpots, updatePlanes, updateRail, updateRays, setNearbyHighlight, updateShadows, updateTrains, updateWedges,
   TRAIN_LAYERS, setTrains3d, updatePlanePositions, hiddenLayers, setRadarFrame, FIRE_LAYERS, updateFires, updateCameras,
 } from '../map/layers.js';
@@ -69,7 +69,7 @@ const newSpot = (lat: number, lng: number, placeId: string | null = null): SpotD
 });
 
 /** Legend keys whose visibility is applied by their own effect below. */
-const FEED_KEYS = ['imagery', 'planes', 'rail', 'trains', 'candidates', 'weather', 'fires', 'cameras'];
+const FEED_KEYS = ['imagery', 'planes', 'rail', 'trains', 'candidates', 'road-quality', 'weather', 'fires', 'cameras'];
 const RADAR_POLL_MS = 10 * 60_000;
 
 type RouteHistoryEntry = { draft: RouteDraft; duration: number | null; ready: boolean };
@@ -273,6 +273,18 @@ export default function MapPage({ user }: { user: User | null }) {
     api.candidates(`${b.getSouth()},${b.getWest()},${b.getNorth()},${b.getEast()}`).then((c) => { if (!stop) { setCandidates(c); updateCandidates(map, c); } }).catch(() => {});
     return () => { stop = true; };
   }, [map, candidatesOn, view]);
+
+  // Road quality: OSM roads graded by surface, fetched by bbox from z13 while the layer is on.
+  useEffect(() => {
+    if (!map) return;
+    const on = vis['road-quality'];
+    setLayerVisible(map, ['road-quality'], on);
+    if (!on || map.getZoom() < ROADS_MIN_ZOOM) return;
+    let stop = false;
+    const b = map.getBounds();
+    api.roads(`${b.getSouth()},${b.getWest()},${b.getNorth()},${b.getEast()}`).then((r) => { if (!stop) updateRoads(map, r); }).catch(() => {});
+    return () => { stop = true; };
+  }, [map, vis['road-quality'], view]);
 
   // NSW RFS fire incidents: fetched on mount and polled every 5 min.
   useEffect(() => {
@@ -812,6 +824,10 @@ export default function MapPage({ user }: { user: User | null }) {
       showCameraPopup(map, coords, hit.properties ?? {});
       return;
     }
+    if (hit.layer.id === 'road-quality') {
+      showRoadPopup(map, [lng, lat], hit.properties ?? {});
+      return;
+    }
     if (FIRE_LAYERS.includes(hit.layer.id)) {
       showFirePopup(map, [lng, lat], hit.properties ?? {});
       return;
@@ -1033,6 +1049,7 @@ export default function MapPage({ user }: { user: User | null }) {
         <button className={`chip${trainsOn ? ' active' : ''}`} onClick={() => toggle('trains')} title="Live passenger train positions, refreshed every 20s (needs a TfNSW key)"><Swatch cat={category('trains')} />{category('trains').label}</button>
         <button className={`chip${weatherOn ? ' active' : ''}`} onClick={() => toggle('weather')} title="Rain radar (RainViewer, recent past only) and the forecast at the map centre for the map time"><Swatch cat={category('weather')} />{category('weather').label}</button>
         <button className={`chip${candidatesOn ? ' active' : ''}`} onClick={() => toggle('candidates')} title="OpenStreetMap viewpoints, ruins and other candidates"><Swatch cat={category('candidates')} />{category('candidates').label}</button>
+        <button className={`chip${vis['road-quality'] ? ' active' : ''}`} onClick={() => toggle('road-quality')} title="OpenStreetMap roads from z13: green good, amber fair, red poor/unpaved, grey unknown. Surface tags are incomplete, so grey and fair are often guesses."><Swatch cat={category('road-quality')} />{category('road-quality').label}</button>
         <button className={`chip${camerasOn ? ' active' : ''}`} onClick={() => toggle('cameras')} title="NSW live traffic cameras (TfNSW)"><Swatch cat={category('cameras')} />{category('cameras').label}</button>
         <button className={`chip${routesOn ? ' active' : ''}`} onClick={() => toggle('routes')} title="Show or hide saved routes"><Swatch cat={category('routes')} />{category('routes').label}</button>
         {user && !editing && (
@@ -1294,6 +1311,15 @@ function homeControl() {
     },
     onRemove() { el.remove(); },
   };
+}
+
+function showRoadPopup(map: MlMap, at: [number, number], p: Record<string, any>) {
+  const e = (v: unknown) => escapeHtml(String(v));
+  // GeoJSON feature properties round-trip nulls as the string "null" from queryRenderedFeatures
+  const has = (v: unknown) => v != null && v !== '' && v !== 'null';
+  const rows = [['Surface', p.surface], ['Smoothness', p.smoothness], ['Speed', has(p.maxspeed) ? `${p.maxspeed} km/h` : ''], ['Lanes', has(p.lanes) ? p.lanes : '']]
+    .filter(([, v]) => v).map(([k, v]) => `${k}: ${e(v)}`);
+  openPopup(map, at, `<strong>${e(p.name || p.highway || 'Road')}</strong> · <span>${e(p.grade)}</span>${rows.length ? `<br/><span>${rows.join(' · ')}</span>` : ''}`);
 }
 
 function showCameraPopup(map: MlMap, at: [number, number], p: Record<string, any>) {
