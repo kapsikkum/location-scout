@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { api, CommonsResponse, NearbyResult, Spot, TrainPass } from '../api.js';
 import { hhmm } from '../time.js';
+import { crowdSummary } from '../map/nearby.js';
 
 /** Phase 3 "Nearby": Event Scout events and crowd, next trains passing, and Commons inspiration. */
 export default function Nearby({ spot }: { spot: Spot }) {
@@ -21,10 +22,7 @@ export default function Nearby({ spot }: { spot: Spot }) {
       {nearby?.status === 'ok' && (
         <>
           {nearby.crowd && (
-            <p className="hint">
-              👥 {nearby.crowd.venue}: {nearby.crowd.live ?? '—'} now vs {nearby.crowd.typical ?? '—'} typical
-              {nearby.crowd.bestWindow ? ` · best window ${nearby.crowd.bestWindow}` : ''}
-            </p>
+            <p className="hint">👥 {crowdSummary(nearby.crowd)}</p>
           )}
           {nearby.events.length === 0 ? (
             <p className="hint">No events in the next 7 days.</p>

@@ -31,7 +31,10 @@ export interface DensityVenue {
   observedAt: string | null; busiestDay: string | null; busiestHour: number | null; quietestDay: string | null;
   openDays: string[]; shoot: boolean;
 }
-export interface DensityHistory { daySummary: { best?: string }[]; now: unknown }
+/** Event Scout's best stretch of hours to shoot; `to` is inclusive, so the window ends at `to + 1`:00. */
+export interface BestWindow { from: number; to: number; label: string }
+/** `daySummary` is keyed by weekday, 0=Sunday (Event Scout's local `Date.getDay()`). */
+export interface DensityHistory { daySummary?: Record<number, { best?: (BestWindow & { score?: number }) | null }>; now: unknown }
 
 async function getJson<T>(baseUrl: string, path: string): Promise<T> {
   const buf = await guardedFetch(`${baseUrl.replace(/\/$/, '')}${path}`, true);
@@ -100,9 +103,16 @@ export function nearestVenue(areaVenues: { slug: string; venues: DensityVenue[] 
   return best ? { slug: best.slug, venue: best.venue } : null;
 }
 
+/** Pure: the day's best window from a venue history, or null if missing or malformed. */
+export function bestWindowFor(history: DensityHistory | null, day: number): BestWindow | null {
+  const best = history?.daySummary?.[day]?.best;
+  if (!best || typeof best !== 'object' || !Number.isFinite(best.from) || !Number.isFinite(best.to)) return null;
+  return { from: best.from, to: best.to, label: typeof best.label === 'string' ? best.label : '' };
+}
+
 export interface NearbyResult {
   events: (ScoutEvent & { goodDuring: boolean })[];
-  crowd: { venue: string; live: number | null; typical: number | null; score: number | null; bestWindow: string | null } | null;
+  crowd: { venue: string; live: number | null; typical: number | null; score: number | null; bestWindow: BestWindow | null } | null;
   status: 'ok' | 'not_configured';
 }
 
@@ -121,7 +131,7 @@ export async function nearbyFor(db: Db, eventScoutUrl: string, lat: number, lng:
     const history = await densityHistoryCached(db, eventScoutUrl, nearest.slug, nearest.venue.name).catch(() => null);
     crowd = {
       venue: nearest.venue.name, live: nearest.venue.live, typical: nearest.venue.typical, score: nearest.venue.score,
-      bestWindow: history?.daySummary?.[0]?.best ?? null,
+      bestWindow: bestWindowFor(history, new Date().getDay()),
     };
   }
   return { events, crowd, status: 'ok' };
