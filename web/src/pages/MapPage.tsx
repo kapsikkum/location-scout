@@ -27,6 +27,7 @@ import SpotPanel from '../components/SpotPanel.js';
 import SpotEditor, { SpotDraft } from '../components/SpotEditor.js';
 import PlaceEditor, { draftToPlace, PlaceDraft, placeToDraft } from '../components/PlaceEditor.js';
 import RouteEditor, { blankRouteDraft, draftToRoute, RouteDraft, routeToDraft } from '../components/RouteEditor.js';
+import { snapLeg } from '../map/routeGeometry.js';
 import { updateRoutes, stepRouteDashAnimation, ROUTE_LINE_LAYER } from '../map/routeLayer.js';
 import { emptyGoodTimes } from '../components/GoodTimesEditor.js';
 import DayStrip from '../components/DayStrip.js';
@@ -584,8 +585,14 @@ export default function MapPage({ user }: { user: User | null }) {
       return;
     }
     if (mode === 'draw' && routeDraftRef.current) {
-      const draft = routeDraftRef.current;
-      setEditing({ type: 'route', draft: { ...draft, vertices: [...draft.vertices, [lng, lat] as [number, number]] } });
+      const draft = routeDraftRef.current, to: [number, number] = [lng, lat], last = draft.vertices.at(-1);
+      const add = (d: RouteDraft, pts: [number, number][]) => {
+        const vertices = [...d.vertices, ...pts];
+        setEditing({ type: 'route', draft: { ...d, vertices, clickEnds: [...(d.clickEnds ?? []), vertices.length] } });
+      };
+      if (!draft.snap || !last) { add(draft, [to]); return; }
+      // Follows the road from the last point; applied to the latest draft in case it changed while routing.
+      void snapLeg(last, to).then((pts) => { const d = routeDraftRef.current; if (d && d.vertices.at(-1) === last) add(d, pts); });
       return;
     }
     if (mode === 'draw' && placeDraft) {

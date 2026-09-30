@@ -10,6 +10,9 @@ export interface RouteDraft {
   vertices: [number, number][];
   staging: { lat: number; lng: number } | null;
   visibility: Visibility;
+  /** Editing only, not saved: follow roads between clicks, and the vertex count after each click (for undo). */
+  snap?: boolean;
+  clickEnds?: number[];
 }
 
 export function routeToDraft(r: Route): RouteDraft {
@@ -27,6 +30,13 @@ export function routeToDraft(r: Route): RouteDraft {
 
 export function blankRouteDraft(): RouteDraft {
   return { name: '', notes: '', access: '', type: 'sprint', vertices: [], staging: null, visibility: 'private' };
+}
+
+/** Undo the last click: with snapping that's the whole road leg it added, else one point. */
+export function undoClick(d: Pick<RouteDraft, 'vertices' | 'clickEnds'>): Pick<RouteDraft, 'vertices' | 'clickEnds'> {
+  const ends = (d.clickEnds ?? []).filter((n) => n <= d.vertices.length);
+  const keep = ends.length && ends.at(-1) === d.vertices.length ? (ends.at(-2) ?? 0) : d.vertices.length - 1;
+  return { vertices: d.vertices.slice(0, Math.max(0, keep)), clickEnds: ends.filter((n) => n <= keep) };
 }
 
 /** The API body for saving a draft. */
@@ -108,9 +118,10 @@ export default function RouteEditor({
         <button type="button" className={drawing ? 'primary' : ''} onClick={() => { onDrawing(!drawing); if (stagingMode) onStagingMode(false); }}>
           {drawing ? 'Done editing' : 'Edit on map'}
         </button>
-        <button type="button" disabled={!draft.vertices.length} onClick={() => set({ vertices: draft.vertices.slice(0, -1) })}>Undo point</button>
-        <button type="button" disabled={!draft.vertices.length} onClick={() => set({ vertices: [] })}>Clear</button>
+        <button type="button" disabled={!draft.vertices.length} onClick={() => set(undoClick(draft))}>Undo point</button>
+        <button type="button" disabled={!draft.vertices.length} onClick={() => set({ vertices: [], clickEnds: [] })}>Clear</button>
       </div>
+      <label className="row mt-8"><input type="checkbox" checked={!!draft.snap} onChange={(e) => set({ snap: e.target.checked })} /> Snap to roads</label>
       <p className="hint">
         {drawing
           ? 'Click to add points, click a segment to insert one, or drag a handle to move a point.'

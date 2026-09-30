@@ -4,6 +4,7 @@ import {
   buildRouteSegments,
   routePlanAnchor,
   type RouteType,
+  osrmLegCoords,
 } from '../src/map/routeGeometry.js';
 
 // --- Segment construction ---
@@ -65,4 +66,18 @@ test('routePlanAnchor: returns null with no staging and no vertices', () => {
 
 test('routePlanAnchor: staging null with no vertices returns null', () => {
   assert.equal(routePlanAnchor([], null), null);
+});
+
+test('osrmLegCoords: road path without its start; null when routing failed', () => {
+  assert.deepEqual(osrmLegCoords({ code: 'Ok', routes: [{ geometry: { coordinates: [[1, 1], [1.5, 1], [2, 2]] } }] }), [[1.5, 1], [2, 2]]);
+  assert.equal(osrmLegCoords({ code: 'NoRoute', routes: [] }), null);
+  assert.equal(osrmLegCoords(null), null);
+});
+
+test('undoClick: removes the last snapped leg whole, or one point without snapping', async () => {
+  const { undoClick } = await import('../src/components/RouteEditor.js');
+  const v = (n: number) => Array.from({ length: n }, (_, i) => [i, i] as [number, number]);
+  assert.deepEqual(undoClick({ vertices: v(5), clickEnds: [1, 5] }), { vertices: v(1), clickEnds: [1] });
+  assert.deepEqual(undoClick({ vertices: v(1), clickEnds: [1] }), { vertices: [], clickEnds: [] });
+  assert.deepEqual(undoClick({ vertices: v(3) }), { vertices: v(2), clickEnds: [] });
 });

@@ -50,3 +50,22 @@ export function routePlanAnchor(
   }
   return null;
 }
+
+const OSRM = 'https://router.project-osrm.org/route/v1/driving';
+
+/** The road path from an OSRM route response, without its first point (the leg's start is already in the route). */
+export function osrmLegCoords(data: unknown): [number, number][] | null {
+  const coords = (data as { code?: string; routes?: { geometry?: { coordinates?: unknown } }[] })?.routes?.[0]?.geometry?.coordinates;
+  if ((data as { code?: string })?.code !== 'Ok' || !Array.isArray(coords) || coords.length < 2) return null;
+  return (coords as [number, number][]).slice(1);
+}
+
+/** Points to add for a click at `to` when snapping: the road path from `from`, or just `to` if routing fails. */
+export async function snapLeg(from: [number, number], to: [number, number]): Promise<[number, number][]> {
+  try {
+    const r = await fetch(`${OSRM}/${from[0]},${from[1]};${to[0]},${to[1]}?geometries=geojson&overview=full`);
+    return osrmLegCoords(await r.json()) ?? [to];
+  } catch {
+    return [to];
+  }
+}
