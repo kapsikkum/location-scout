@@ -57,12 +57,17 @@ export default function App() {
           {NAV.filter(([path]) => user || (path !== '/import' && path !== '/settings')).map(([path, label]) => (
             <Link key={path} to={path} className={active(path) ? 'active' : ''}>{label}</Link>
           ))}
-          {user && <span className="topbar__nav-meta">{user.username} ({user.role})</span>}
+          {user && (
+            <>
+              <span className="topbar__nav-meta">{user.username} ({user.role})</span>
+              <button type="button" className="topbar__nav-signout" onClick={() => { setMenuOpen(false); void logout(); }}>Sign out</button>
+            </>
+          )}
         </nav>
         {user ? (
           <>
             <span className="meta">{user.username} ({user.role})</span>
-            <button onClick={logout}>Sign out</button>
+            <button className="topbar__signout" onClick={logout}>Sign out</button>
           </>
         ) : (
           <Link to="/login">Sign in</Link>

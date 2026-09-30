@@ -152,6 +152,8 @@ export default function MapPage({ user }: { user: User | null }) {
     m.addControl(homeControl(), 'top-right');
     m.addControl(new ScaleControl({}), 'bottom-left');
     m.once('style.load', () => { initLayers(m); initFeedLayers(m); setMap(m); });
+    // Compact attribution starts expanded (full width on phones); start it as the (i) button instead.
+    m.once('load', () => m.getContainer().querySelector('.maplibregl-compact-show')?.classList.remove('maplibregl-compact-show'));
     const onMove = () => {
       const c = m.getCenter();
       setCentre({ lat: c.lat, lng: c.lng });
@@ -1011,7 +1013,7 @@ export default function MapPage({ user }: { user: User | null }) {
   const selectedSunBearing = selectedSpot ? resolveSunPlannerBearing(selectedSpot, sunAnchor, sunAnchorBearing) : null;
 
   return (
-    <div className={`mapshell${panelOpen ? ' mapshell--panel' : ''}`}>
+    <div className={`mapshell${panelOpen ? ' mapshell--panel' : ''}${editing ? ' mapshell--editing' : ''}`}>
       <div ref={container} className="mapshell__map" />
       {error && <div className="maptoast error">{error}</div>}
       {follow && (
